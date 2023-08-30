@@ -5,7 +5,7 @@ Yet Another SHell
 Just a little experiment to learn how shells work and what takes to make one
 
 ## How to make a cool prompt
-To make a prompt, you change the variable `$PS1`
+To make a prompt, you change the variable `$PS1`. 
 | char | meaning |
 | --- | --- |
 | n | Current user's username | 

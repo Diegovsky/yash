@@ -12,6 +12,7 @@ color-eyre = { version = "0.6.2", default-features=false }
 derive_more = "0.99.17"
 directories = "5.0.1"
 glam = "0.24.1"
+logos = "0.13.0"
 nix = { version = "0.26.2", default-features = false, features = ["term", "ioctl", "user", "hostname"] }
 regex = { version = "1.9.3" }
 shell-words = "1.1.0"

@@ -201,8 +201,8 @@ impl Shell {
     pub fn read_line(&mut self) -> YshResult<()> {
         shell_print!("{}", self.get_prompt());
         match self.read_line.read_line()? {
-            read_line::Command::Exit => return Ok(()),
-            read_line::Command::Execute(program) => {
+            read_line::Execute::Exit => return Ok(()),
+            read_line::Execute::Command(program) => {
                 let program = self.expand_vars(&program);
                 let args = Self::split_whitespace(&program)?;
                 let mut args = args.iter().map(|s| s.as_str());
@@ -211,7 +211,7 @@ impl Shell {
                     self.execute(cmd, &args)?;
                 }
             },
-            read_line::Command::Cancel => (),
+            read_line::Execute::Cancel => (),
         };
         Ok(())
     }

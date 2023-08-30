@@ -16,12 +16,20 @@ pub struct ReadLine {
 
 pub mod cursor;
 pub mod text_field;
+mod parser;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Command {
+pub enum Execute {
     Exit,
     Cancel,
-    Execute(String),
+    Command(Command),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Command {
+    command: String,
+    args: Vec<String>,
+    redir: Option<String>
 }
 
 pub fn utf8_byte_len(i: u8) -> Option<u8> {
@@ -35,6 +43,8 @@ pub fn utf8_byte_len(i: u8) -> Option<u8> {
     }
     None
 }
+
+// pub fn parse_line() -> 
 
 impl ReadLine {
     pub fn new_with_history(lines: Vec<String>) -> Self {
@@ -137,7 +147,7 @@ impl ReadLine {
         Ok(())
     }
 
-    pub fn read_line(&mut self) -> YshResult<Command> {
+    pub fn read_line(&mut self) -> YshResult<Execute> {
         let termsize = cursor::terminal_size()?;
         let pos = cursor::get_cursor_pos()?;
         self.text_field.clear();
@@ -148,9 +158,9 @@ impl ReadLine {
             let response = self.text_field.handle_input(std::str::from_utf8(&buf).unwrap());
             write(&response.bytes)?;
             match response.commands {
-                text_field::Commands::Exit =>break Command::Exit,
-                text_field::Commands::EOF => break Command::Cancel,
-                text_field::Commands::Newline => if self.current_match.is_none() { break Command::Execute(self.text_field.text().to_string()) } else { self.accept()? },
+                text_field::Commands::Exit =>break Execute::Exit,
+                text_field::Commands::EOF => break Execute::Cancel,
+                text_field::Commands::Newline => if self.current_match.is_none() { break Execute::Command(self.text_field.text().to_string()) } else { self.accept()? },
                 special if special.get_key().is_some() => {
                     let key = special.get_key().unwrap();
                     match key {
@@ -162,7 +172,7 @@ impl ReadLine {
                 _ => (),
             }
         };
-        if let Command::Execute(ref line) = r {
+        if let Execute::Command(ref line) = r {
             if !line.is_empty() {
                 self.history.push(line.clone());
             }
