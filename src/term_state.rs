@@ -39,3 +39,26 @@ impl TermState {
         Self::put_termios(&self.old)
     }
 }
+
+static OLD_TERMIOS: std::sync::OnceLock<nix::libc::termios> = std::sync::OnceLock::new();
+
+pub fn get_termstate() -> TermState {
+    let old_termios =
+        nix::sys::termios::tcgetattr(nix::libc::STDIN_FILENO).expect("Failed to get raw terminal");
+    // This weird hack is needeed necause the `nix` wrapper does not implement `Send`.
+    OLD_TERMIOS.set(old_termios.clone().into()).unwrap();
+    TermState::new(old_termios)
+}
+
+pub fn restore() {
+    if let Some(termios) = OLD_TERMIOS.get() {
+        // Hack undone :)
+        let old_termios = (*termios).into();
+        let _ = nix::sys::termios::tcsetattr(
+            nix::libc::STDIN_FILENO,
+            nix::sys::termios::SetArg::TCSANOW,
+            &old_termios,
+        );
+    }
+}
+

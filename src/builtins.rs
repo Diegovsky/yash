@@ -1,21 +1,14 @@
 use std::{ffi::{OsStr, OsString}, cell::RefCell, rc::Rc};
 
-use bstr::{BString, ByteVec};
-use color_eyre::eyre::{eyre, ContextCompat};
-use derive_more::From;
+use color_eyre::eyre::eyre;
 
-use crate::Shell;
+use crate::{Shell, command::Command};
 
 pub type Args<'a, 'b: 'a> = &'a [&'b str];
 pub type Result = color_eyre::Result<()>;
-pub trait BuiltinFn = Fn(&mut Shell, Args)->Result;
-// pub type BuiltinFn = Fn(&mut Shell, Args)->Result;
-
-type ClosureHolder = Rc<dyn BuiltinFn + 'static>;
 
 #[derive(Clone)]
 pub enum Action {
-    Closure(ClosureHolder),
     Alias{ cmd: String, extra_args: Vec<String> },
     Fn(fn(&mut Shell, Args)->Result),
 }
@@ -23,7 +16,6 @@ pub enum Action {
 impl std::fmt::Debug for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let variant = match self {
-            Self::Closure(_) => "Closure",
             Self::Fn(_) => "Fn",
             Self::Alias{ .. } => "Alias"
         };
@@ -35,26 +27,30 @@ impl std::fmt::Display for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Alias{cmd, extra_args} => write!(f, "{} {}", cmd, extra_args.join(" ")),
-            Self::Fn(_) | Self::Closure(_) => write!(f, "<builtin>"),
+            Self::Fn(_) => write!(f, "<builtin>"),
         }
         
     }
 }
 
 impl Action {
-    pub fn call(&self, shell: &mut Shell, args: Args)->Result {
+    pub fn call(&self, shell: &mut Shell, command: Command)->Result {
         if shell.builtin_recursive_count >= 16 {
             shell.builtin_recursive_count = 0;
             return Err(eyre!("Too many layers deep!"));
         }
         match self {
-            Self::Closure(c) => c(shell, args),
-            Self::Fn(f) => f(shell, args),
+            Self::Fn(f) => {
+                let args = command.args.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+                f(shell, &args)
+            },
             Self::Alias{cmd, extra_args} => {
-                let mut new_args = extra_args.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-                new_args.extend_from_slice(args);
+                let mut extra_args = extra_args.clone();
+                extra_args.extend_from_slice(&command.args);
+
+                let cmd = Command {command: cmd.clone(), args: extra_args, ..command};
                 shell.builtin_recursive_count += 1;
-                let r = shell.execute(cmd, &new_args);
+                let r = shell.execute(cmd);
                 shell.builtin_recursive_count = 0;
                 r
             },
@@ -69,9 +65,6 @@ pub struct Builtin {
 }
 
 impl Builtin {
-    pub fn new_closure(name: String, action: impl BuiltinFn + 'static ) -> Self {
-        Self { action: Action::Closure(Rc::new(action)), name }
-    }
     pub fn new_fn(name: String, action: fn(&mut Shell, Args)->Result) -> Self {
         Self { action: Action::Fn(action), name }
     }
@@ -118,8 +111,9 @@ macro_rules! ensure_arg {
     };
 }
 
-/* Functions that implement the aliases themselves: */
+/* Functions that implement the builtins themselves: */
 
+/// Change current directory
 pub fn cd(shell: &mut Shell, args: Args) -> Result {
     let path = args.get(0).map(|s| String::from(*s)).unwrap_or_else(|| get_home());
     if let Err(e) = shell.change_directory(&path) {
@@ -128,6 +122,7 @@ pub fn cd(shell: &mut Shell, args: Args) -> Result {
     Ok(())
 }
 
+/// Quits the shell
 pub fn exit(shell: &mut Shell, args: Args) -> Result {
     let code = args.get(0)
         .and_then(|s| s.parse::<i32>().ok())
@@ -136,6 +131,7 @@ pub fn exit(shell: &mut Shell, args: Args) -> Result {
     Ok(())
 }
 
+/// Lists, creates or deletes aliases
 pub fn alias(shell: &mut Shell, args: Args) -> Result {
     // alias
     // print all aliases
@@ -146,18 +142,29 @@ pub fn alias(shell: &mut Shell, args: Args) -> Result {
     }
     for arg in args {
         match arg.split_once('=') {
-            // alias name=cmd
-            // Creates aliases
             Some((name, cmd)) => {
-                let mut args = Shell::split_whitespace(cmd)?;
-                let cmd = args.remove(0);
-                shell.register_builtin(Builtin::new_alias(name.to_owned(), cmd, args));
+                if cmd.is_empty() {
+                    // alias name=
+                    // Delete alias
+                    match shell.builtins.get(name) {
+                        Some(b) if matches!(b.action, Action::Alias{..}) => { shell.builtins.remove(name); },
+                        _ => shell_println!("Alias '{}' not found.", name),
+                    }
+                } else {
+                    // alias name=cmd
+                    // Creates aliases
+                    let mut args = shell_word_split::split(cmd)?;
+                    let cmd = args.remove(0);
+                    shell.register_builtin(Builtin::new_alias(name.to_owned(), cmd, args));
+                }
             },
             // alias name
             // Print alias if it exists
             None => {
                 if let Some(builtin) = shell.builtins.get(*arg) {
                     shell_println!("{}", builtin);
+                } else {
+                    shell_println!("\"{}\" is not an alias", arg)
                 }
             },
         }
@@ -165,6 +172,7 @@ pub fn alias(shell: &mut Shell, args: Args) -> Result {
     Ok(())
 }
 
+/// Debug command to set the cursor position on-screen
 pub fn set_pos(shell: &mut Shell, args: Args) -> Result {
     let x: u8 = ensure_arg!(args, 0).parse()?;
     let y: u8 = ensure_arg!(args, 1).parse()?;
@@ -172,16 +180,37 @@ pub fn set_pos(shell: &mut Shell, args: Args) -> Result {
     Ok(())
 }
 
+/// Executes a program and exits
 pub fn exec(shell: &mut Shell, args: Args) -> Result {
     let cmd = ensure_arg!(args, 0);
     let args = &args[1..];
-    shell.execute_program(cmd, args)?;
+    let cmd = Command {
+        command: cmd.to_string(), args: args.iter().map(|s| s.to_string()).collect(), special_action: None,
+    };
+    shell.execute_program(cmd)?;
     shell.exit(0);
     Ok(())
 }
 
+/// Debug command to recompile the shell and run it
 pub fn r(shell: &mut Shell, _args: Args) -> Result {
     exec(shell, &["cargo", "run"])
+}
+
+/// Executes a file as a shell script
+pub fn source(shell: &mut Shell, args: Args) -> Result {
+    let path = ensure_arg!(args, 0);
+    let path = std::path::Path::new(path);
+    shell.source_file(path)?;
+    Ok(())
+}
+
+/// Run a command without triggering a builtin
+pub fn command(shell: &mut Shell, args: Args) -> Result {
+    let Some((command, args)) = args.split_first() else { return Ok(()) };
+    let command = String::from(*command);
+    let args = args.iter().copied().map(String::from).collect::<Vec<_>>();
+    shell.execute(Command { command, args, special_action: None })
 }
 
 macro_rules! register_builtins {
@@ -201,8 +230,10 @@ register_builtins!(
     cd,
     exit,
     alias,
+    command,
     exec,
     set_pos,
+    source,
     r
 );
 

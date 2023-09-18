@@ -1,13 +1,11 @@
 #![feature(trait_alias)]
 #![feature(variant_count)]
 use std::{
-    cell::RefCell,
     collections::HashMap,
-    ffi::{OsStr, OsString},
-    path::{Path, PathBuf}, io::Read, borrow::Cow,
+    path::{Path, PathBuf}, io::BufRead, borrow::Cow,
 };
 
-use bstr::{ByteVec, ByteSlice};
+use color_eyre::eyre::WrapErr;
 
 pub type Vec2 = glam::u32::UVec2;
 
@@ -16,6 +14,10 @@ mod utils;
 mod term_state;
 mod prompt;
 mod config;
+mod signals;
+mod command;
+
+use command::Command;
 
 pub type YshResult<T> = color_eyre::Result<T>;
 
@@ -32,6 +34,15 @@ macro_rules! shell_println {
     ($fmt:expr $(, $expr:expr)* $(,)?) => {
         $crate::shell_print!(concat!($fmt, "\n") $(, $expr)*)
     };
+}
+
+#[macro_export]
+macro_rules! sdbg {
+    ($expr:expr) => {{
+        let expr = $expr;
+        $crate::shell_println!("[{}:{}] {} = {:?}", file!(), line!(), stringify!($expr), expr);
+        expr
+    }};
 }
 
 pub fn write(bytes: &[u8]) -> nix::Result<()> {
@@ -72,6 +83,7 @@ pub struct Shell {
     vars: HashMap<String, String>,
     builtins: HashMap<String, builtins::Builtin>,
     builtin_recursive_count: usize,
+    signals: signals::Signals,
     oneshot_var: Option<(String, String)>
 }
 
@@ -80,6 +92,7 @@ impl Shell {
         let mut this = Self {
             term_state,
             builtins: builtins::native_builtins(),
+            signals: signals::Signals::init(),
             ..Default::default()
         };
         this.change_directory(".")?;
@@ -99,43 +112,56 @@ impl Shell {
         Ok(())
     }
 
-    pub fn execute_program(&mut self, cmd: &str, args: &[&str]) -> std::io::Result<()> {
+    pub fn execute_program(&mut self, cmd: Command) -> std::io::Result<()> {
         self.term_state.put_old()?;
+        // A bit of a "syntax hack" while the `try block` feature is unstable
+        // This is done like this so we can still use normal error handling
+        // but still restore the terminal state if anything fails.
+        let mut spawned = vec![];
         let result: std::io::Result<()> = (|| {
-            let mut process = std::process::Command::new(cmd);
+            let name = cmd.command.clone();
+            let mut processes = cmd.prepare_to_execute()?;
+            processes.reverse();
             if let Some(pair) = self.oneshot_var.take() {
-                process.env(pair.0, pair.1);
+                processes[0].env(pair.0, pair.1);
             }
-            let mut child = match process.args(args).spawn() {
-                Ok(c) => c,
-                Err(e) => match e.kind() {
-                    std::io::ErrorKind::NotFound => {
-                        shell_print!("{}: command not found\n", cmd);
-                        return Ok(());
-                    }
-                    _ => return Err(e),
-                },
-            };
-            child.wait()?;
+            let mut last_stdout = None;
+            for mut p in processes {
+                if let Some(stdout) = last_stdout.take() {
+                    p.stdin(stdout);
+                }
+                let mut child = match p.spawn() {
+                    Ok(c) => c,
+                    Err(e) => match e.kind() {
+                        std::io::ErrorKind::NotFound => {
+                            shell_print!("{}: command not found\n", name);
+                            return Ok(());
+                        }
+                        _ => return Err(e),
+                    },
+                };
+                last_stdout = child.stdout.take();
+                spawned.push(child);
+            }
             Ok(())
         })();
+        spawned.reverse();
+        for mut p in spawned {
+            if result.is_err() {
+                p.kill().unwrap();
+            }
+            else {
+                p.wait().unwrap();
+            }
+        }
         self.term_state.put_new()?;
         result
     }
 
-    pub fn execute_builtin(&mut self, name: &str, args: &[&str]) -> Option<YshResult<()>> {
-        let Some(action) = self.builtins.get(name).map(|b| b.action.clone()) else {
-            return None;
-        };
-        let result = action.call(self, args);
-        Some(result)
-    }
-
-    pub fn execute(&mut self, cmd: &str, args: &[&str]) -> YshResult<()> {
-        if let Some(res) = self.execute_builtin(cmd, args) {
-            return res
-        } else {
-            self.execute_program(cmd, args)?;
+    pub fn execute(&mut self, cmd: Command) -> YshResult<()> {
+        match self.builtins.get(&cmd.command).map(|b| b.action.clone()) {
+            Some(action) => action.call(self, cmd)?,
+            None => self.execute_program(cmd)?,
         }
         Ok(())
     }
@@ -172,45 +198,45 @@ impl Shell {
         })
     }
 
-    fn try_command_or_var<'a>(&mut self, iter: &mut impl Iterator<Item = &'a str>) -> Option<&'a str> {
-        let parts = iter.next()?.splitn(2, '=').collect::<Vec<_>>();
+    fn try_command_or_var<'a>(&mut self, mut cmd: Command) -> Option<Command> {
+        let parts = cmd.command.splitn(2, '=').collect::<Vec<_>>();
         if parts.len() == 1 {
-            return Some(parts[0])
+            return Some(cmd)
         }
         let (name, value) = (parts[0].to_string(), parts[1].to_string());
-        match iter.next() {
-            Some(c) => { 
-                self.oneshot_var = Some((name, value));
-                Some(c)
-            },
-            None => {
-                self.set_var(name, value);
-                return None
-            }
+        if cmd.args.len() == 0 {
+            // we got: NAME=VALUE
+            self.set_var(name, value);
+            None
+        } else {
+            // we got: NAME=VALUE <command>
+            self.oneshot_var = Some((name, value));
+            cmd.command = cmd.args.remove(0);
+            Some(cmd)
         }
     }
 
     pub fn split_whitespace(text: &str) -> YshResult<Vec<String>> {
-        let mut split = shell_words::split(text)?;
+        let mut split = shell_word_split::split(text)?;
         if split.len() == 0 {
             split.push(String::from(""))
         }
         Ok(split)
     }
 
+    pub fn execute_line(&mut self, cmd: &str) -> YshResult<()> {
+        let cmd = self.expand_vars(&cmd);
+        let cmd = Command::parse(&cmd)?;
+        let Some(cmd) = self.try_command_or_var(cmd) else { return Ok(()) };
+        self.execute(cmd)?;
+        Ok(())
+    }
+
     pub fn read_line(&mut self) -> YshResult<()> {
         shell_print!("{}", self.get_prompt());
         match self.read_line.read_line()? {
             read_line::Execute::Exit => return Ok(()),
-            read_line::Execute::Command(program) => {
-                let program = self.expand_vars(&program);
-                let args = Self::split_whitespace(&program)?;
-                let mut args = args.iter().map(|s| s.as_str());
-                if let Some(cmd) = self.try_command_or_var(&mut args) {
-                    let args = args.collect::<Vec<_>>();
-                    self.execute(cmd, &args)?;
-                }
-            },
+            read_line::Execute::Command(cmd) => self.execute_line(&cmd)?,
             read_line::Execute::Cancel => (),
         };
         Ok(())
@@ -224,10 +250,30 @@ impl Shell {
         }
         Ok(())
     }
+
+    pub fn source_file(&mut self, filename: impl AsRef<Path>) -> YshResult<()> {
+        let filename = filename.as_ref();
+        let file = std::fs::File::open(filename)
+            .wrap_err_with(|| format!("Failed to open file '{}'", filename.display()))?;
+        let file = std::io::BufReader::new(file);
+        for l in file.lines() {
+            let l = l.wrap_err_with(|| format!("Failed to read file '{}'", filename.display()))?;
+            self.execute_line(&l)?
+        }
+        Ok(())
+    }
     pub fn run(&mut self) -> YshResult<i32> {
         match config::get_history() {
             Ok(history) => self.read_line = read_line::ReadLine::new_with_history(history),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) => shell_println!("Failed to open history file: {}", e),
+        }
+        match config::get_yashfile() {
+            Ok(lines) => for line in lines {
+                match self.execute_line(&line) {
+                    Ok(()) => (),
+                    Err(e) => { shell_println!("error: {}", e); break }
+                }
+            },
             Err(e) => shell_println!("Failed to open history file: {}", e),
         }
 
@@ -244,25 +290,15 @@ impl Shell {
 }
 
 fn main() {
-    let old_termios =
-        nix::sys::termios::tcgetattr(nix::libc::STDIN_FILENO).expect("Failed to raw terminal");
     std::panic::set_hook({
         let (panic_hook, eyre_hook) = color_eyre::config::HookBuilder::new().into_hooks();
         eyre_hook.install().unwrap();
-        // This weird hack is needeed necause the `nix` wrapper does not implement `Send`.
-        let old_termios: nix::libc::termios = old_termios.clone().into();
         Box::new(move |panic_info| {
-            // Hack undone :)
-            let old_termios = old_termios.into();
-            let _ = nix::sys::termios::tcsetattr(
-                nix::libc::STDIN_FILENO,
-                nix::sys::termios::SetArg::TCSANOW,
-                &old_termios,
-            );
+            term_state::restore();
             println!("{}", panic_hook.panic_report(panic_info));
         })
     });
-    let mut shell = Shell::init(term_state::TermState::new(old_termios)).expect("Failed to init shell");
+    let mut shell = Shell::init(term_state::get_termstate()).expect("Failed to init shell");
     std::process::exit(shell.run().unwrap());
 }
 

@@ -1,4 +1,4 @@
-use std::{path::Path, os::unix::prelude::OsStrExt, ffi::OsStr};
+use std::{path::Path, os::unix::prelude::OsStrExt, ffi::OsStr, io::BufRead};
 
 
 #[macro_export]
@@ -8,6 +8,17 @@ macro_rules! binformat {
         let mut buf = Vec::with_capacity(16);
         write!(buf, $($tt)*).unwrap();
         buf
+    }};
+}
+
+#[macro_export]
+macro_rules! static_regex {
+    ($expr:expr) => {{
+        use regex::Regex;
+        static REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        REGEX.get_or_init(|| {
+            Regex::new($expr).unwrap()
+        })
     }};
 }
 
@@ -40,3 +51,19 @@ pub fn path_filename(path: &Path) -> Option<&OsStr> {
         path.file_name()
     }
 }
+
+pub fn read_file(p: impl AsRef<std::path::Path>) -> std::io::Result<Vec<String>> {
+    let file = match std::fs::File::open(p) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => Err(e)?,
+    };
+    let st = std::io::BufReader::new(file);
+    Ok(st.lines()
+        .filter_map(|s| s.ok())
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from(s))
+        .collect())
+}
+
+

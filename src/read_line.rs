@@ -1,37 +1,30 @@
-use std::{path::Path, os::unix::prelude::OsStrExt};
+use std::{path::Path, os::{unix::prelude::OsStrExt, fd::FromRawFd}, process::Stdio};
 
 use bstr::ByteSlice;
 
-use crate::{read, write, YshResult, Shell, shell_println, shell_print, utils::{path_parent, path_filename, char_count}};
+use crate::{read, write, YshResult, Shell, shell_println, shell_print, utils::{path_parent, path_filename, char_count}, sdbg};
+
+use self::history::History;
+
+pub mod cursor;
+pub mod text_field;
+pub mod history;
 
 #[derive(Debug, Default)]
 pub struct ReadLine {
-    history: Vec<String>,
-    hist_index: usize,
+    history: History,
     suggestion_index: usize,
     current_match: Option<String>,
     current_choice: Option<String>,
     text_field: text_field::TextField,
 }
 
-pub mod cursor;
-pub mod text_field;
-mod parser;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Execute {
     Exit,
     Cancel,
-    Command(Command),
+    Command(String),
 }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Command {
-    command: String,
-    args: Vec<String>,
-    redir: Option<String>
-}
-
 pub fn utf8_byte_len(i: u8) -> Option<u8> {
     if i >= 192 {
         let len =
@@ -44,17 +37,15 @@ pub fn utf8_byte_len(i: u8) -> Option<u8> {
     None
 }
 
-// pub fn parse_line() -> 
-
 impl ReadLine {
     pub fn new_with_history(lines: Vec<String>) -> Self {
         Self {
-            history: lines,
+            history: History::from_lines(lines),
             ..Default::default()
         }
     }
     pub fn history(&self) -> &[String] {
-        &self.history
+        self.history.lines()
     }
     fn aligned_read(c: &mut [u8]) -> nix::Result<&[u8]> {
         loop {
@@ -71,20 +62,12 @@ impl ReadLine {
     }
 
     pub fn scroll_history(&mut self, offset: isize) -> YshResult<()> {
-        let new_index = self.hist_index as isize + offset;
-        if new_index < 0 || new_index >= self.history.len() as isize {
-            return Ok(())
-        }
-        if self.hist_index == 0 {
-            self.history.push(self.text_field.text().to_string());
-        }
-        self.hist_index = new_index as usize;
-        let response = if new_index == 0 {
-            self.text_field.set_text(&self.history.pop().unwrap())
+        if let Some(new_line) = self.history.scroll(self.text_field.text(), offset) {
+            let response = self.text_field.set_text(new_line);
+            write(&response.bytes)?;
         } else {
-            self.text_field.set_text(&self.history[self.history.len() - self.hist_index - 1])
-        };
-        write(&response.bytes)?;
+            write(cursor::bell())?;
+        }
         Ok(())
     }
 
@@ -173,10 +156,9 @@ impl ReadLine {
             }
         };
         if let Execute::Command(ref line) = r {
-            if !line.is_empty() {
-                self.history.push(line.clone());
-            }
+            self.history.push(line);
         }
+        self.history.unselect();
         write(b"\r\n\x1b[J")?;
         Ok(r)
     }
