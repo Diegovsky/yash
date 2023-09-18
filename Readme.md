@@ -1,11 +1,12 @@
 # yash
-Yet Another SHell
+Yet Another SHell. Yup, very creative. Developing in my free time to see how far I can go.
 
 ## Why?
-Just a little experiment to learn how shells work and what takes to make one
+Just a little experiment to learn how shells work and what takes to make one.
 
 ## How to make a cool prompt
-To make a prompt, you change the variable `$PS1`. 
+To make a prompt, you change the variable `$PS1`. Special characters after `%` are replaced with information described in the following table:
+
 | char | meaning |
 | --- | --- |
 | n | Current user's username | 
