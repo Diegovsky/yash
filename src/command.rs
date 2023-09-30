@@ -1,4 +1,4 @@
-use crate::YshResult;
+use crate::{YshResult, shell_println};
 
 use std::process::Stdio;
 
@@ -52,6 +52,71 @@ impl Command {
     }
     pub fn parse(line: &str) -> YshResult<Self> {
         Self::parse_args(shell_word_split::split(line)?)
+    }
+    /// Shifts the arguments to the left by one, removing the command name
+    pub fn shift(mut self) -> Self {
+        let command =
+            if self.args.len() == 0 {
+                String::new()
+            } else {
+                self.args.remove(0)
+            };
+        Self {command, ..self}
+    }
+}
+
+impl crate::Shell {
+    pub fn execute_program(&mut self, cmd: Command) -> std::io::Result<()> {
+        // This vector holds all spawned processes.
+        // We wait on all of them later.
+        let mut spawned = vec![];
+        let _token = self.term_state.put_old_token()?;
+            
+        let mut pipeline = cmd.prepare_to_execute()?;
+        pipeline.reverse();
+
+        // If there is a oneshot variable, apply it to all commands in the pipeline
+        if let Some(pair) = self.oneshot_var.take() {
+            for p in pipeline.iter_mut() {
+                p.env(&pair.0, &pair.1);
+            }
+        }
+
+        let result = (|| {
+            let mut last_stdout = None;
+            for mut p in pipeline {
+                // Link last command's stdout with current stdin.
+                // This is how pipes are implemented.
+                if let Some(stdout) = last_stdout.take() {
+                    p.stdin(stdout);
+                }
+
+                // Spawn the program
+                let name = p.get_program().to_owned();
+                let mut child = match p.spawn() {
+                    Ok(c) => c,
+                    Err(e) => match e.kind() {
+                        std::io::ErrorKind::NotFound => {
+                            shell_println!("{:?}: command not found", name);
+                            return Ok(());
+                        }
+                        _ => return Err(e)?,
+                    },
+                };
+                last_stdout = child.stdout.take();
+                spawned.push(child);
+            }
+            Ok(())
+        })();
+        for mut p in spawned {
+            // Kill everyone if any of them fails to spawn
+            if result.is_err() {
+                p.kill().unwrap();
+            } else {
+                p.wait().unwrap();
+            }
+        }
+        result
     }
 }
 

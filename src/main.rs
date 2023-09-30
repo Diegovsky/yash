@@ -1,21 +1,25 @@
 #![feature(trait_alias)]
 #![feature(variant_count)]
+#![feature(if_let_guard)]
 use std::{
+    borrow::Cow,
     collections::HashMap,
-    path::{Path, PathBuf}, io::BufRead, borrow::Cow,
+    io::BufRead,
+    path::{Path, PathBuf},
 };
 
 use color_eyre::eyre::WrapErr;
 
 pub type Vec2 = glam::u32::UVec2;
 
-mod read_line;
-mod utils;
-mod term_state;
-mod prompt;
-mod config;
-mod signals;
 mod command;
+mod config;
+mod prompt;
+mod read_line;
+mod signals;
+mod term_state;
+mod utils;
+mod strings;
 
 use command::Command;
 
@@ -31,6 +35,9 @@ macro_rules! shell_print {
 
 #[macro_export]
 macro_rules! shell_println {
+    () => {
+        $crate::shell_print!("\n")
+    };
     ($fmt:expr $(, $expr:expr)* $(,)?) => {
         $crate::shell_print!(concat!($fmt, "\n") $(, $expr)*)
     };
@@ -40,7 +47,13 @@ macro_rules! shell_println {
 macro_rules! sdbg {
     ($expr:expr) => {{
         let expr = $expr;
-        $crate::shell_println!("[{}:{}] {} = {:?}", file!(), line!(), stringify!($expr), expr);
+        $crate::shell_println!(
+            "[{}:{}] {} = {:?}",
+            file!(),
+            line!(),
+            stringify!($expr),
+            expr
+        );
         expr
     }};
 }
@@ -84,7 +97,7 @@ pub struct Shell {
     builtins: HashMap<String, builtins::Builtin>,
     builtin_recursive_count: usize,
     signals: signals::Signals,
-    oneshot_var: Option<(String, String)>
+    oneshot_var: Option<(String, String)>,
 }
 
 impl Shell {
@@ -100,8 +113,7 @@ impl Shell {
         Ok(this)
     }
     pub fn register_builtin(&mut self, builtin: builtins::Builtin) {
-        self.builtins
-            .insert(builtin.name.to_string(), builtin);
+        self.builtins.insert(builtin.name.to_string(), builtin);
     }
 
     pub fn change_directory(&mut self, path: impl AsRef<Path>) -> YshResult<()> {
@@ -110,52 +122,6 @@ impl Shell {
         std::env::set_var("CWD", &path);
         self.cwd = path;
         Ok(())
-    }
-
-    pub fn execute_program(&mut self, cmd: Command) -> std::io::Result<()> {
-        self.term_state.put_old()?;
-        // A bit of a "syntax hack" while the `try block` feature is unstable
-        // This is done like this so we can still use normal error handling
-        // but still restore the terminal state if anything fails.
-        let mut spawned = vec![];
-        let result: std::io::Result<()> = (|| {
-            let name = cmd.command.clone();
-            let mut processes = cmd.prepare_to_execute()?;
-            processes.reverse();
-            if let Some(pair) = self.oneshot_var.take() {
-                processes[0].env(pair.0, pair.1);
-            }
-            let mut last_stdout = None;
-            for mut p in processes {
-                if let Some(stdout) = last_stdout.take() {
-                    p.stdin(stdout);
-                }
-                let mut child = match p.spawn() {
-                    Ok(c) => c,
-                    Err(e) => match e.kind() {
-                        std::io::ErrorKind::NotFound => {
-                            shell_print!("{}: command not found\n", name);
-                            return Ok(());
-                        }
-                        _ => return Err(e),
-                    },
-                };
-                last_stdout = child.stdout.take();
-                spawned.push(child);
-            }
-            Ok(())
-        })();
-        spawned.reverse();
-        for mut p in spawned {
-            if result.is_err() {
-                p.kill().unwrap();
-            }
-            else {
-                p.wait().unwrap();
-            }
-        }
-        self.term_state.put_new()?;
-        result
     }
 
     pub fn execute(&mut self, cmd: Command) -> YshResult<()> {
@@ -182,26 +148,16 @@ impl Shell {
     }
 
     pub fn get_var_or_env(&self, name: &str) -> Option<String> {
-        self.vars.get(name)
-        .cloned()
-        .or_else(|| std::env::var(name).ok())
-    }
-
-    pub fn expand_vars<'a>(&self, text: &'a str) -> Cow<'a, str> {
-        use regex::Regex;
-        static REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-        let regex = REGEX.get_or_init(|| {
-            Regex::new(r#"\$(\w+)"#).unwrap()
-        });
-        regex.replace_all(text, move |captures: &regex::Captures| {
-            self.get_var_or_env(&captures[1]).unwrap_or_default()
-        })
+        self.vars
+            .get(name)
+            .cloned()
+            .or_else(|| std::env::var(name).ok())
     }
 
     fn try_command_or_var<'a>(&mut self, mut cmd: Command) -> Option<Command> {
         let parts = cmd.command.splitn(2, '=').collect::<Vec<_>>();
         if parts.len() == 1 {
-            return Some(cmd)
+            return Some(cmd);
         }
         let (name, value) = (parts[0].to_string(), parts[1].to_string());
         if cmd.args.len() == 0 {
@@ -216,18 +172,12 @@ impl Shell {
         }
     }
 
-    pub fn split_whitespace(text: &str) -> YshResult<Vec<String>> {
-        let mut split = shell_word_split::split(text)?;
-        if split.len() == 0 {
-            split.push(String::from(""))
-        }
-        Ok(split)
-    }
-
     pub fn execute_line(&mut self, cmd: &str) -> YshResult<()> {
         let cmd = self.expand_vars(&cmd);
         let cmd = Command::parse(&cmd)?;
-        let Some(cmd) = self.try_command_or_var(cmd) else { return Ok(()) };
+        let Some(cmd) = self.try_command_or_var(cmd) else {
+            return Ok(());
+        };
         self.execute(cmd)?;
         Ok(())
     }
@@ -246,7 +196,7 @@ impl Shell {
         while self.exit_code.is_none() {
             if let Err(e) = self.read_line() {
                 shell_println!("{}", e);
-            } 
+            }
         }
         Ok(())
     }
@@ -268,12 +218,17 @@ impl Shell {
             Err(e) => shell_println!("Failed to open history file: {}", e),
         }
         match config::get_yashfile() {
-            Ok(lines) => for line in lines {
-                match self.execute_line(&line) {
-                    Ok(()) => (),
-                    Err(e) => { shell_println!("error: {}", e); break }
+            Ok(lines) => {
+                for line in lines {
+                    match self.execute_line(&line) {
+                        Ok(()) => (),
+                        Err(e) => {
+                            shell_println!("error: {}", e);
+                            break;
+                        }
+                    }
                 }
-            },
+            }
             Err(e) => shell_println!("Failed to open history file: {}", e),
         }
 
@@ -282,7 +237,8 @@ impl Shell {
         // Exit
         let history_path = config::get_history_file();
         std::fs::create_dir_all(history_path.parent().unwrap())?;
-        std::fs::write(history_path, self.read_line.history().join("\n")).expect("Failed to save history");
+        std::fs::write(history_path, self.read_line.history().join("\n"))
+            .expect("Failed to save history");
 
         self.term_state.put_old().unwrap();
         Ok(self.exit_code.unwrap_or_default())

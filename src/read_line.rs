@@ -1,21 +1,30 @@
-use std::{path::Path, os::{unix::prelude::OsStrExt, fd::FromRawFd}, process::Stdio};
+use std::{
+    ops::Add,
+    os::{fd::FromRawFd, unix::prelude::OsStrExt},
+    path::Path,
+    process::Stdio,
+};
 
 use bstr::ByteSlice;
+use glam::UVec2;
 
-use crate::{read, write, YshResult, Shell, shell_println, shell_print, utils::{path_parent, path_filename, char_count}, sdbg};
+use crate::{
+    read, sdbg, shell_print, shell_println,
+    utils::{char_at, char_count, path_filename, path_parent},
+    write, Shell, YshResult,
+};
 
-use self::history::History;
+use self::{completion::SelectionDirection, history::History};
 
+pub mod completion;
 pub mod cursor;
-pub mod text_field;
 pub mod history;
+pub mod text_field;
 
 #[derive(Debug, Default)]
 pub struct ReadLine {
     history: History,
-    suggestion_index: usize,
-    current_match: Option<String>,
-    current_choice: Option<String>,
+    completion: completion::Completer,
     text_field: text_field::TextField,
 }
 
@@ -27,12 +36,16 @@ pub enum Execute {
 }
 pub fn utf8_byte_len(i: u8) -> Option<u8> {
     if i >= 192 {
-        let len =
-        if i >> 5 & 1 == 0 { 2 }
-        else if i >> 6 & 1 == 0 { 3 }
-        else if i >> 7 & 1 == 0 { 4 }
-        else { panic!("Invalid utf-8 sequence!") };
-        return Some(len)
+        let len = if i >> 5 & 1 == 0 {
+            2
+        } else if i >> 6 & 1 == 0 {
+            3
+        } else if i >> 7 & 1 == 0 {
+            4
+        } else {
+            panic!("Invalid utf-8 sequence!")
+        };
+        return Some(len);
     }
     None
 }
@@ -49,15 +62,17 @@ impl ReadLine {
     }
     fn aligned_read(c: &mut [u8]) -> nix::Result<&[u8]> {
         loop {
-        let mut extra = 0;
+            let mut extra = 0;
             if read(&mut c[0..1])? != 0 {
                 if c[0] == b'\x1b' {
                     extra = read(&mut c[1..])?;
                 } else if let Some(utf8len) = utf8_byte_len(c[0]) {
                     extra = read(&mut c[1..utf8len as usize])?;
                 }
-                return Ok(&c[0..1 + extra])
-            } else { continue };
+                return Ok(&c[0..1 + extra]);
+            } else {
+                continue;
+            };
         }
     }
 
@@ -71,63 +86,69 @@ impl ReadLine {
         Ok(())
     }
 
-    pub fn suggest_files(&mut self) -> YshResult<()> {
-        let current_line = self.text_field.text();//self.current_match.get_or_insert_with(|| self.text_field.text().to_owned());
-        let current_word = Shell::split_whitespace(current_line)?.last().cloned().unwrap_or_default();
-        if current_word.is_empty() {
-            return Ok(())
+    /// This function is not a method because of missing disjoint borrow rules
+    // !TODO: put this inside text_field?
+    fn word_at_cursor(text_field: &text_field::TextField) -> &str {
+        let line = text_field.text();
+        let cursor_pos = text_field.cursor_pos();
+        let UVec2 { x: word_end, .. } = cursor_pos;
+        let word_end = word_end as usize;
+        if word_end != 0 && line.chars().nth(word_end - 1) != Some(' ') {
+            let word_start = line[0..word_end]
+                .rfind(|c| c == ' ')
+                .map(|i| i + 1)
+                .unwrap_or_default();
+            &line[word_start..word_end]
+        } else {
+            ""
         }
-        let path = std::path::Path::new(&current_word);
-        let file_name = path_filename(path).unwrap_or_default();
-        let parent = path_parent(path).unwrap_or(Path::new("."));
-        let files: Vec<_> = match std::fs::read_dir(parent) {
-            Ok(e) => e.collect(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
-            Err(e) => return Err(e)?,
-        };
-        let mut entries: Vec<_> = files.into_iter().filter_map(Result::ok).filter(|e| e.file_name().as_bytes().starts_with(file_name.as_bytes())).collect();
-        entries.sort_by_cached_key(|entry| entry.file_name());
-        let entries: Vec<Vec<u8>> = entries.iter().take(5).map(|e| e.file_name().to_string_lossy().into_owned().into()).collect();
-        self.suggest_completions(&entries)
     }
 
-    pub fn suggest_completions<T: AsRef<[u8]>>(&mut self, items: &[T]) -> YshResult<()> {
-        let pos = cursor::get_cursor_pos()?;
-        if items.len() == 0 {
-            return Ok(())
-        }
-        self.current_choice = Some(items[self.suggestion_index % items.len()].as_ref().to_str_lossy().into_owned());
-        let mut buf = vec![cursor::kill_to_term_end()];
-        buf.extend(items.iter().map(T::as_ref));
-        let lines = buf.len()-1;
-        let c = [cursor::bell(), b"no matches"].concat();
-        if lines == 0 {
-            buf.push(&c);
-        }
-        let mut buf = buf.join(b"\n\r".as_slice());
-        buf.extend_from_slice(cursor::kill_to_term_end());
-        buf.extend_from_slice(&cursor::move_up(lines as _));
-        buf.push(b'\r');
-        buf.extend_from_slice(&cursor::move_right(pos.x-1));
-        write(&buf)?;
+    pub fn complete_next(&mut self, direction: SelectionDirection) -> YshResult<()> {
+        let word = Self::word_at_cursor(&self.text_field);
+        self.completion.next(word, direction)?;
         Ok(())
     }
 
-    pub fn complete(&mut self) -> YshResult<()> {
-        if let Some(sug) = self.current_choice.take() {
-            self.text_field.erase_left(char_count(&sug) as u32).write()?;
+    fn handle_response(&mut self, response: text_field::Response) -> YshResult<Option<Execute>> {
+        use text_field::{Commands, SpecialKey};
+        write(&response.bytes)?;
+        match self.completion.current_completion() {
+            None => Ok(Some(match response.commands {
+                Commands::None => return Ok(None),
+                Commands::Exit => Execute::Exit,
+                Commands::EOF => Execute::Cancel,
+                Commands::Newline => Execute::Command(self.text_field.text().to_string()),
+                special if let Some(key) = special.get_key() => { match key {
+                    SpecialKey::Up => self.scroll_history(1)?,
+                    SpecialKey::Down => self.scroll_history(-1)?,
+                    SpecialKey::Tab => self.complete_next(SelectionDirection::Down)?,
+                    SpecialKey::ShiftTab => self.complete_next(SelectionDirection::Up)?,
+                }; return Ok(None) }
+                e => unreachable!("Unknown key: {:?}", e)
+            })),
+            Some(completion_info) => match response.commands {
+                Commands::None => return Ok(None),
+                Commands::EOF | Commands::Exit => { self.completion.clear()?; return Ok(None) },
+                Commands::Newline => {
+                    // Accept completion
+                    let word_count = char_count(Self::word_at_cursor(&self.text_field));
+                    self.text_field.move_left(word_count as u32);
+                    self.text_field.erase_rest();
+                    let response = self.text_field.handle_input(completion_info.item.to_str().unwrap());
+                    // Prevents special characters in complete prompts from being interpreted
+                    self.completion.clear()?;
+                    self.handle_response(response)
+                },
+                special if let Some(key) = special.get_key() => { match key {
+                    SpecialKey::Down |
+                    SpecialKey::Tab => self.complete_next(SelectionDirection::Down)?,
+                    SpecialKey::Up |
+                    SpecialKey::ShiftTab => self.complete_next(SelectionDirection::Up)?,
+                }; return Ok(None) }
+                e => unreachable!("Unknown key: {:?}", e)
+            }
         }
-        self.suggest_files()?;
-        self.text_field.handle_input(self.current_choice.as_ref().unwrap()).write()?;
-        self.suggestion_index += 1;
-        Ok(())
-    }
-
-    pub fn accept(&mut self) -> YshResult<()> {
-        self.suggestion_index = 0;
-        self.text_field.handle_input(&self.current_choice.take().unwrap()).write()?;
-        self.current_match = None;
-        Ok(())
     }
 
     pub fn read_line(&mut self) -> YshResult<Execute> {
@@ -138,21 +159,11 @@ impl ReadLine {
         let mut c = [0u8; 4];
         let r = loop {
             let buf = Self::aligned_read(&mut c)?;
-            let response = self.text_field.handle_input(std::str::from_utf8(&buf).unwrap());
-            write(&response.bytes)?;
-            match response.commands {
-                text_field::Commands::Exit =>break Execute::Exit,
-                text_field::Commands::EOF => break Execute::Cancel,
-                text_field::Commands::Newline => if self.current_match.is_none() { break Execute::Command(self.text_field.text().to_string()) } else { self.accept()? },
-                special if special.get_key().is_some() => {
-                    let key = special.get_key().unwrap();
-                    match key {
-                        text_field::SpecialKey::Up => self.scroll_history(1)?,
-                        text_field::SpecialKey::Down => self.scroll_history(-1)?,
-                        text_field::SpecialKey::Tab => self.suggest_files()?,
-                    }
-                }
-                _ => (),
+            let response = self
+                .text_field
+                .handle_input(std::str::from_utf8(&buf).unwrap());
+            if let Some(execute) = self.handle_response(response)? {
+                break execute;
             }
         };
         if let Execute::Command(ref line) = r {

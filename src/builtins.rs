@@ -1,16 +1,15 @@
-use std::{ffi::{OsStr, OsString}, cell::RefCell, rc::Rc};
+use std::{ffi::{OsStr, OsString}, cell::RefCell, rc::Rc, borrow::Cow};
 
 use color_eyre::eyre::eyre;
 
 use crate::{Shell, command::Command};
 
-pub type Args<'a, 'b: 'a> = &'a [&'b str];
 pub type Result = color_eyre::Result<()>;
 
 #[derive(Clone)]
 pub enum Action {
     Alias{ cmd: String, extra_args: Vec<String> },
-    Fn(fn(&mut Shell, Args)->Result),
+    Fn(fn(&mut Shell, Command)->Result),
 }
 
 impl std::fmt::Debug for Action {
@@ -40,15 +39,12 @@ impl Action {
             return Err(eyre!("Too many layers deep!"));
         }
         match self {
-            Self::Fn(f) => {
-                let args = command.args.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-                f(shell, &args)
-            },
+            Self::Fn(f) => f(shell, command),
             Self::Alias{cmd, extra_args} => {
-                let mut extra_args = extra_args.clone();
-                extra_args.extend_from_slice(&command.args);
+                let mut args = extra_args.clone();
+                args.extend_from_slice(&command.args);
 
-                let cmd = Command {command: cmd.clone(), args: extra_args, ..command};
+                let cmd = Command {command: cmd.clone(), args, ..command};
                 shell.builtin_recursive_count += 1;
                 let r = shell.execute(cmd);
                 shell.builtin_recursive_count = 0;
@@ -65,7 +61,7 @@ pub struct Builtin {
 }
 
 impl Builtin {
-    pub fn new_fn(name: String, action: fn(&mut Shell, Args)->Result) -> Self {
+    pub fn new_fn(name: String, action: fn(&mut Shell, Command)->Result) -> Self {
         Self { action: Action::Fn(action), name }
     }
     pub fn new_alias(name: String, cmd: String, extra_args: Vec<String>) -> Self {
@@ -114,16 +110,19 @@ macro_rules! ensure_arg {
 /* Functions that implement the builtins themselves: */
 
 /// Change current directory
-pub fn cd(shell: &mut Shell, args: Args) -> Result {
-    let path = args.get(0).map(|s| String::from(*s)).unwrap_or_else(|| get_home());
-    if let Err(e) = shell.change_directory(&path) {
+pub fn cd(shell: &mut Shell, command: Command) -> Result {
+    let path = command.args.get(0)
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|| Cow::Owned(get_home()));
+    if let Err(e) = shell.change_directory(path.as_str()) {
         return Err(eyre!("'{:?}': {}", path, e))?;
     }
     Ok(())
 }
 
 /// Quits the shell
-pub fn exit(shell: &mut Shell, args: Args) -> Result {
+pub fn exit(shell: &mut Shell, command: Command) -> Result {
+    let args = command.args;
     let code = args.get(0)
         .and_then(|s| s.parse::<i32>().ok())
         .unwrap_or(0);
@@ -132,7 +131,8 @@ pub fn exit(shell: &mut Shell, args: Args) -> Result {
 }
 
 /// Lists, creates or deletes aliases
-pub fn alias(shell: &mut Shell, args: Args) -> Result {
+pub fn alias(shell: &mut Shell, command: Command) -> Result {
+    let args = command.args;
     // alias
     // print all aliases
     if args.len() == 0 {
@@ -161,7 +161,7 @@ pub fn alias(shell: &mut Shell, args: Args) -> Result {
             // alias name
             // Print alias if it exists
             None => {
-                if let Some(builtin) = shell.builtins.get(*arg) {
+                if let Some(builtin) = shell.builtins.get(&arg) {
                     shell_println!("{}", builtin);
                 } else {
                     shell_println!("\"{}\" is not an alias", arg)
@@ -173,7 +173,8 @@ pub fn alias(shell: &mut Shell, args: Args) -> Result {
 }
 
 /// Debug command to set the cursor position on-screen
-pub fn set_pos(shell: &mut Shell, args: Args) -> Result {
+pub fn set_pos(shell: &mut Shell, command: Command) -> Result {
+    let args = command.args;
     let x: u8 = ensure_arg!(args, 0).parse()?;
     let y: u8 = ensure_arg!(args, 1).parse()?;
     crate::write(&crate::read_line::cursor::set_position(x, y))?;
@@ -181,24 +182,20 @@ pub fn set_pos(shell: &mut Shell, args: Args) -> Result {
 }
 
 /// Executes a program and exits
-pub fn exec(shell: &mut Shell, args: Args) -> Result {
-    let cmd = ensure_arg!(args, 0);
-    let args = &args[1..];
-    let cmd = Command {
-        command: cmd.to_string(), args: args.iter().map(|s| s.to_string()).collect(), special_action: None,
-    };
-    shell.execute_program(cmd)?;
+pub fn exec(shell: &mut Shell, command: Command) -> Result {
+    shell.execute_program(command.shift())?;
     shell.exit(0);
     Ok(())
 }
 
 /// Debug command to recompile the shell and run it
-pub fn r(shell: &mut Shell, _args: Args) -> Result {
-    exec(shell, &["cargo", "run"])
+pub fn r(shell: &mut Shell, command: Command) -> Result {
+    exec(shell, Command{ command: String::new(), args: vec!["cargo".to_string(), "run".to_string()], ..command })
 }
 
 /// Executes a file as a shell script
-pub fn source(shell: &mut Shell, args: Args) -> Result {
+pub fn source(shell: &mut Shell, command: Command) -> Result {
+    let args = command.args;
     let path = ensure_arg!(args, 0);
     let path = std::path::Path::new(path);
     shell.source_file(path)?;
@@ -206,11 +203,24 @@ pub fn source(shell: &mut Shell, args: Args) -> Result {
 }
 
 /// Run a command without triggering a builtin
-pub fn command(shell: &mut Shell, args: Args) -> Result {
-    let Some((command, args)) = args.split_first() else { return Ok(()) };
-    let command = String::from(*command);
-    let args = args.iter().copied().map(String::from).collect::<Vec<_>>();
-    shell.execute(Command { command, args, special_action: None })
+pub fn command(shell: &mut Shell, command: Command) -> Result {
+    shell.execute_program(command.shift())?;
+    Ok(())
+}
+
+pub fn export(shell: &mut Shell, command: Command) -> Result {
+    for arg in command.args {
+        match arg.split_once('=') {
+            Some((name, val)) => std::env::set_var(name, val),
+            None => {
+                let name = arg;
+                if let Some(v) = shell.get_var(&name) {
+                    std::env::set_var(name, v);
+                }
+            },
+        }
+    }
+    Ok(())
 }
 
 macro_rules! register_builtins {
@@ -234,6 +244,7 @@ register_builtins!(
     exec,
     set_pos,
     source,
+    export,
     r
 );
 

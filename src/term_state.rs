@@ -8,6 +8,14 @@ pub struct TermState {
     new: Option<Termios>,
 }
 
+pub struct OldStateToken<'a>(&'a TermState);
+
+impl Drop for OldStateToken<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.put_new().unwrap();
+    }
+}
+
 impl TermState {
     pub fn new(current: Termios) -> Self {
         let mut new = current.clone();
@@ -27,8 +35,8 @@ impl TermState {
         }
     }
     fn put_termios(termios: &Option<Termios>) -> nix::Result<()> {
-        if let Some(termios) = termios.as_ref() {
-            return termios::tcsetattr(nix::libc::STDIN_FILENO, termios::SetArg::TCSANOW, termios)
+        if let Some(termios) = termios {
+            return termios::tcsetattr(nix::libc::STDIN_FILENO, termios::SetArg::TCSADRAIN, termios)
         }
         Ok(())
     }
@@ -38,13 +46,21 @@ impl TermState {
     pub fn put_old(&self) -> nix::Result<()> {
         Self::put_termios(&self.old)
     }
+
+    pub fn put_old_token(&self) -> nix::Result<OldStateToken> {
+        self.put_old()?;
+        Ok(OldStateToken(self))
+    }
+}
+
+fn get_termios() -> nix::Result<Termios> {
+    termios::tcgetattr(nix::libc::STDIN_FILENO)
 }
 
 static OLD_TERMIOS: std::sync::OnceLock<nix::libc::termios> = std::sync::OnceLock::new();
 
 pub fn get_termstate() -> TermState {
-    let old_termios =
-        nix::sys::termios::tcgetattr(nix::libc::STDIN_FILENO).expect("Failed to get raw terminal");
+    let old_termios = get_termios().expect("Failed to get raw terminal");
     // This weird hack is needeed necause the `nix` wrapper does not implement `Send`.
     OLD_TERMIOS.set(old_termios.clone().into()).unwrap();
     TermState::new(old_termios)

@@ -13,6 +13,7 @@ pub enum SpecialKey {
     Up,
     Down,
     Tab,
+    ShiftTab,
 }
 
 #[derive(Debug, Default)]
@@ -45,6 +46,7 @@ bitflags::bitflags! {
     /// mainly because it handles the special bit quirk for you.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
     pub struct Commands: u8 {
+        const None = 0;
         const EOF = 1;
         const Exit = 1<<1;
         const Newline = 1<<2;
@@ -184,7 +186,24 @@ impl TextField {
         mem::take(&mut self.response)
     }
 
-    fn move_left(&mut self, times: u32) {
+    pub fn erase_rest(&mut self) {
+        self.response.bytes = commands![
+            cursor::kill_line(),
+        ];
+        self.text.truncate(self.cursor_pos.x as usize);
+    }
+
+    pub fn move_to(&mut self, text: &str, index: usize) {
+        let x = self.cursor_pos.x;
+        let index = index as u32;
+        if index > x {
+            self.move_right(index - x)
+        } else if index < x {
+            self.move_left(x - index)
+        }
+    }
+
+    pub fn move_left(&mut self, times: u32) {
         let times = times.min(self.cursor_pos.x);
         if times == 0 {
             return;
@@ -193,7 +212,7 @@ impl TextField {
         self.response.bytes.extend_from_slice(&cursor::move_left(times));
     }
 
-    fn move_right(&mut self, times: u32) {
+    pub fn move_right(&mut self, times: u32) {
         let newx = self.cursor_pos.x + times;
         if newx >= self.bounds.x {
             return
@@ -215,7 +234,7 @@ impl TextField {
                 4 => { // ctrl D
                     self.response.commands = Commands::EOF;
                 }
-                5 => { // ctrl D
+                5 => { // ctrl E
                     self.move_right(self.text_len() as u32 - self.cursor_pos.x);
                 }
                 b'\t' => {
@@ -231,6 +250,7 @@ impl TextField {
                         'B' => self.response.commands = Commands::special(SpecialKey::Down),
                         'C' => self.move_right(1),
                         'D' => self.move_left(1),
+                        'Z' => self.response.commands = Commands::special(SpecialKey::ShiftTab),
                         '3' => if it.next() == Some('~') { self.move_right(1); self.handle_backspace() },
                         _ => (),
                     }
@@ -250,5 +270,9 @@ impl TextField {
 
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    pub fn cursor_pos(&self) -> Pos {
+        self.cursor_pos
     }
 }
