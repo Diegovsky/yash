@@ -2,7 +2,6 @@
 #![feature(variant_count)]
 #![feature(if_let_guard)]
 use std::{
-    borrow::Cow,
     collections::HashMap,
     io::BufRead,
     path::{Path, PathBuf},
@@ -20,6 +19,8 @@ mod signals;
 mod term_state;
 mod utils;
 mod strings;
+
+mod debug;
 
 use command::Command;
 
@@ -41,21 +42,6 @@ macro_rules! shell_println {
     ($fmt:expr $(, $expr:expr)* $(,)?) => {
         $crate::shell_print!(concat!($fmt, "\n") $(, $expr)*)
     };
-}
-
-#[macro_export]
-macro_rules! sdbg {
-    ($expr:expr) => {{
-        let expr = $expr;
-        $crate::shell_println!(
-            "[{}:{}] {} = {:?}",
-            file!(),
-            line!(),
-            stringify!($expr),
-            expr
-        );
-        expr
-    }};
 }
 
 pub fn write(bytes: &[u8]) -> nix::Result<()> {
@@ -197,6 +183,7 @@ impl Shell {
             if let Err(e) = self.read_line() {
                 shell_println!("{}", e);
             }
+            debug::render_debug_text()?;
         }
         Ok(())
     }
@@ -289,7 +276,7 @@ mod tests {
 
     #[test]
     fn expand_env_command_simple() {
-        let mut shell = mock_shell();
+        let shell = mock_shell();
         std::env::set_var("FOO", "fool");
         assert_eq!(shell.expand_vars("echo $FOO"), "echo fool");
     }
