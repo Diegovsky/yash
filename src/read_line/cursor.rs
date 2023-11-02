@@ -1,10 +1,10 @@
 use std::io::Write;
-use std::num::NonZeroU32;
+
 
 use bstr::ByteSlice;
 use nix::pty::Winsize;
 
-use crate::{write, read, Vec2, binformat, shell_println};
+use crate::{write, read, Vec2, binformat};
 
 #[must_use]
 pub fn move_left(times: u32) -> Vec<u8> {

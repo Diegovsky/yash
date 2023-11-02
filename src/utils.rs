@@ -112,6 +112,17 @@ impl<'a> BytesBuf<'a> {
     }
 }
 
+#[macro_export]
+macro_rules! bytes_buf {
+    () => {
+            $crate::utils::BytesBuf::new()
+    };
+    
+    ($($e:expr),*) => {
+        $crate::utils::BytesBuf::of([$(::std::borrow::Cow::from($e)),*])
+    };
+}
+
 impl<'a, T> std::iter::Extend<T> for BytesBuf<'a> where T: Into<Cow<'a, [u8]>> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
         self.buf.extend(iter.into_iter().map(T::into))

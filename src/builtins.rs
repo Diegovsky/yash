@@ -1,4 +1,4 @@
-use std::{ffi::{OsStr, OsString}, cell::RefCell, rc::Rc, borrow::Cow};
+use std::{borrow::Cow};
 
 use color_eyre::eyre::eyre;
 
@@ -173,7 +173,7 @@ pub fn alias(shell: &mut Shell, command: Command) -> Result {
 }
 
 /// Debug command to set the cursor position on-screen
-pub fn set_pos(shell: &mut Shell, command: Command) -> Result {
+pub fn set_pos(_shell: &mut Shell, command: Command) -> Result {
     let args = command.args;
     let x: u8 = ensure_arg!(args, 0).parse()?;
     let y: u8 = ensure_arg!(args, 1).parse()?;
