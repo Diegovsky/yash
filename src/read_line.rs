@@ -1,17 +1,12 @@
-use std::{
-    ops::Add,
-    os::{fd::FromRawFd, unix::prelude::OsStrExt},
-    path::Path,
-    process::Stdio,
-};
+
 
 use bstr::ByteSlice;
 use glam::UVec2;
 
 use crate::{
-    read, sdbg, shell_print, shell_println,
-    utils::{char_at, char_count, path_filename, path_parent},
-    write, Shell, YshResult,
+    read,
+    utils::{char_count},
+    write, YshResult, shell_println, sdbg,
 };
 
 use self::{completion::SelectionDirection, history::History};
@@ -94,6 +89,7 @@ impl ReadLine {
         let UVec2 { x: word_end, .. } = cursor_pos;
         let word_end = word_end as usize;
         if word_end != 0 && line.chars().nth(word_end - 1) != Some(' ') {
+            // Find the start of the word by searching backwards for a space
             let word_start = line[0..word_end]
                 .rfind(|c| c == ' ')
                 .map(|i| i + 1)
@@ -113,42 +109,45 @@ impl ReadLine {
     fn handle_response(&mut self, response: text_field::Response) -> YshResult<Option<Execute>> {
         use text_field::{Commands, SpecialKey};
         write(&response.bytes)?;
-        match self.completion.current_completion() {
-            None => Ok(Some(match response.commands {
-                Commands::None => return Ok(None),
-                Commands::Exit => Execute::Exit,
-                Commands::EOF => Execute::Cancel,
-                Commands::Newline => Execute::Command(self.text_field.text().to_string()),
+        let exe = match self.completion.current_completion() {
+            // No completion in progress
+            None => match response.commands {
+                Commands::None => None,
+                Commands::Exit => Some(Execute::Exit),
+                Commands::EOF => Some(Execute::Cancel),
+                Commands::Newline => Some(Execute::Command(self.text_field.text().to_string())),
                 special if let Some(key) = special.get_key() => { match key {
                     SpecialKey::Up => self.scroll_history(1)?,
                     SpecialKey::Down => self.scroll_history(-1)?,
                     SpecialKey::Tab => self.complete_next(SelectionDirection::Down)?,
                     SpecialKey::ShiftTab => self.complete_next(SelectionDirection::Up)?,
-                }; return Ok(None) }
+                }; None }
                 e => unreachable!("Unknown key: {:?}", e)
-            })),
+            },
+            // Completion in progress
             Some(completion_info) => match response.commands {
-                Commands::None => return Ok(None),
-                Commands::EOF | Commands::Exit => { self.completion.clear()?; return Ok(None) },
+                Commands::None => None,
+                Commands::EOF | Commands::Exit => { self.completion.clear()?; None },
                 Commands::Newline => {
                     // Accept completion
-                    let word_count = char_count(Self::word_at_cursor(&self.text_field));
-                    self.text_field.move_left(word_count as u32);
-                    self.text_field.erase_rest();
-                    let response = self.text_field.handle_input(completion_info.item.to_str().unwrap());
+                    let word_count = char_count(sdbg!(Self::word_at_cursor(&self.text_field))) as u32;
+                    self.text_field.move_left(word_count);
+                    self.text_field.erase_right(word_count);
+                    let response = self.text_field.handle_input(completion_info.item());
                     // Prevents special characters in complete prompts from being interpreted
                     self.completion.clear()?;
-                    self.handle_response(response)
+                    return self.handle_response(response)
                 },
                 special if let Some(key) = special.get_key() => { match key {
                     SpecialKey::Down |
                     SpecialKey::Tab => self.complete_next(SelectionDirection::Down)?,
                     SpecialKey::Up |
                     SpecialKey::ShiftTab => self.complete_next(SelectionDirection::Up)?,
-                }; return Ok(None) }
+                }; None }
                 e => unreachable!("Unknown key: {:?}", e)
             }
-        }
+        };
+        Ok(exe)
     }
 
     pub fn read_line(&mut self) -> YshResult<Execute> {
@@ -167,7 +166,7 @@ impl ReadLine {
             }
         };
         if let Execute::Command(ref line) = r {
-            self.history.push(line);
+            self.history.push(sdbg!(line));
         }
         self.history.unselect();
         write(b"\r\n\x1b[J")?;

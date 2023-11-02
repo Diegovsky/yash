@@ -17,6 +17,7 @@ regex = { version = "1.9.3" }
 yansi-term = "0.1.2"
 shell-word-split = {path="../shell-word-split"}
 signal-hook = "0.3.17"
+fehler = "1.0.0"
 
 [profile.release]
 opt-level = "z"  # Optimize for size.

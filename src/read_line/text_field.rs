@@ -3,7 +3,7 @@ use std::mem;
 use bstr::ByteVec;
 
 use crate::utils::{char_count, char_at};
-use crate::{Vec2 as Pos, shell_println, shell_print};
+use crate::{Vec2 as Pos};
 
 use super::cursor;
 
@@ -114,6 +114,7 @@ impl TextField {
     }
 
     fn handle_backspace(&mut self) {
+        // Do nothing on line start
         if self.cursor_pos.x == 0 {
             return
         }
@@ -131,12 +132,18 @@ impl TextField {
         )
     }
 
-
-    pub fn erase_left(&mut self, times: u32) -> Response {
+    pub fn erase_left(&mut self, times: u32) {
+        // This could be better optimized
         for _ in 0..times {
             self.handle_backspace();
         }
-        mem::take(&mut self.response)
+    }
+
+    pub fn erase_right(&mut self, times: u32)  {
+        self.move_right(times);
+        for _ in 0..times {
+            self.handle_backspace();
+        }
     }
 
     fn cx(&self) -> usize {
@@ -193,7 +200,7 @@ impl TextField {
         self.text.truncate(self.cursor_pos.x as usize);
     }
 
-    pub fn move_to(&mut self, text: &str, index: usize) {
+    pub fn move_to(&mut self, _text: &str, index: usize) {
         let x = self.cursor_pos.x;
         let index = index as u32;
         if index > x {
@@ -260,12 +267,17 @@ impl TextField {
                 _ => self.handle_char(c),
             }
         }
-        mem::take(&mut self.response)
+        self.take_response()
     }
 
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor_pos = Default::default();
+        self.response = Default::default();
+    }
+
+    pub fn take_response(&mut self) -> Response {
+        mem::take(&mut self.response)
     }
 
     pub fn text(&self) -> &str {
@@ -275,4 +287,5 @@ impl TextField {
     pub fn cursor_pos(&self) -> Pos {
         self.cursor_pos
     }
+
 }

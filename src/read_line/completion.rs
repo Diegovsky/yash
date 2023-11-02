@@ -1,21 +1,36 @@
+use bstr::BStr;
 use color_eyre::eyre::Context;
 use glam::UVec2;
 
 use crate::utils::BytesBuf;
 use crate::write;
-use crate::{sdbg, shell_println, utils, YshResult};
-use std::{
-    borrow::Cow, ffi::OsString, fs::DirEntry, io::Result as IoResult, os::unix::prelude::OsStrExt,
-    path::Path,
-};
+use crate::utils;
+use std::borrow::Cow;
+
+pub(self) use std::io::Result as IoResult;
+
+use self::files::FileProvider;
 
 use super::cursor;
+
+mod files;
 
 use bstr::{BString, ByteSlice, ByteVec};
 
 #[derive(Default, Debug)]
 pub struct Completer {
     current_selection: Option<Selection>,
+    file_provider: FileProvider,
+}
+
+trait CompletionProvider<'a> {
+    type Error: std::error::Error + Send + Sync + 'static;
+    type Item: AsRef<[u8]> + 'a;
+    fn provide(&mut self, current_word: &str) -> Result<(), Self::Error>;
+    fn items(&self) -> &[Self::Item];
+    fn accept(&self, item: &Self::Item) -> BString {
+        BString::from(item.as_ref())
+    }
 }
 
 pub enum SelectionDirection {
@@ -26,54 +41,31 @@ pub enum SelectionDirection {
 #[derive(Default, Debug)]
 struct Selection {
     index: u8,
+    word: String,
     word_hash: u64,
-    items: Vec<BString>,
 }
 
 impl Selection {
     fn new(current_word: &str) -> Selection {
         Selection {
             word_hash: utils::hash(current_word),
+            word: current_word.to_owned(),
             index: 0,
-            items: provide_files(current_word).unwrap_or_else(|e| vec![format!("{:#}", e).into()]),
         }
     }
 }
 
-fn format_filename(entry: DirEntry) -> BString {
-    let file_type = entry.file_type().expect("Failed to query file informaton");
-    let file_name = entry.file_name();
-    let mut file_name = BString::from(Vec::from_os_string(file_name).expect("Got invalid filename"));
-    if file_type.is_dir() {
-        // Append a slash if it is a directory
-        file_name.push(b'/');
-    }
-    if file_name.find_byteset(b" \t").is_some() {
-        // Surround filename with quotes if it contains
-        file_name.insert(0, b'"');
-        file_name.push(b'"');
-    }
-    file_name
-}
+#[derive(Debug, Clone)]
+pub struct CompletionInfo {
+    item: BString,
 
-fn provide_files(filter: &str) -> YshResult<Vec<BString>> {
-    let folder = Path::new(filter);
-    let filename = utils::path_filename(folder).unwrap_or_default();
-    let folder = utils::path_parent(folder).unwrap_or(Path::new("."));
-    let mut items: Vec<_> = std::fs::read_dir(folder)
-        .wrap_err(folder.display().to_string())?
-        .filter_map(Result::ok)
-        .map(format_filename)
-        .filter(|f| f.starts_with(filename.as_bytes()))
-        .collect();
-    items.sort();
-    Ok(items)
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct CompletionInfo<'a> {
-    pub item: &'a BString,
     pub total_items: usize,
+}
+
+impl CompletionInfo {
+    pub fn item(&self) -> &str {
+        self.item.to_str().unwrap()
+    }
 }
 
 fn paint_selected(text: &[u8]) -> Vec<u8> {
@@ -120,12 +112,16 @@ impl Completer {
             .current_selection
             .take()
             .filter(|sel| sel.word_hash == utils::hash(current_word));
-        let current_selection = self
-            .current_selection
-            .get_or_insert_with(|| Selection::new(current_word));
-
+        let current_selection = match self.current_selection {
+            Some(ref sel) => sel,
+            None => {
+                    self.file_provider.provide(current_word)?;
+                    &*self.current_selection.insert(Selection::new(current_word))
+                },
+        };
         let pos = cursor::get_cursor_pos()?;
-        let response = suggest_completions(pos, &current_selection.items, current_selection.index);
+        let items = self.file_provider.items();
+        let response = suggest_completions(pos, &items, current_selection.index);
         write(&response)?;
         Ok(())
     }
@@ -144,9 +140,10 @@ impl Completer {
     }
     pub fn current_completion(&self) -> Option<CompletionInfo> {
         let current_selection = self.current_selection.as_ref()?;
-        let total_items = current_selection.items.len();
-        let index = index_safe(total_items, current_selection.index)?;
-        let item = &current_selection.items[index];
+        let items = self.file_provider.items();
+        let total_items = items.len();
+        let index = index_safe(items.len(), current_selection.index)?;
+        let item = self.file_provider.accept(&items[index]);
         Some(CompletionInfo {
             item,
             total_items,
