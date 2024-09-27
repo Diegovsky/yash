@@ -2,9 +2,9 @@ use bstr::BStr;
 use color_eyre::eyre::Context;
 use glam::UVec2;
 
+use crate::{sdbg, utils};
 use crate::utils::BytesBuf;
 use crate::write;
-use crate::utils;
 use std::borrow::Cow;
 
 pub(self) use std::io::Result as IoResult;
@@ -58,7 +58,6 @@ impl Selection {
 #[derive(Debug, Clone)]
 pub struct CompletionInfo {
     item: BString,
-
     pub total_items: usize,
 }
 
@@ -89,13 +88,20 @@ fn suggest_completions<T: AsRef<[u8]> + std::fmt::Debug>(
 ) -> Vec<u8> {
     let mut buf = BytesBuf::of([cursor::kill_to_term_end()]);
     if let Some(selected) = index_safe(items.len(), selected) {
-        buf.extend(items.iter().take(MAX_ROWS).map(T::as_ref).enumerate().map(|(i, item)| {
-            if i == selected {
-                Cow::Owned(paint_selected(item))
-            } else {
-                Cow::Borrowed(item)
-            }
-        }));
+        buf.extend(
+            items
+                .iter()
+                .take(MAX_ROWS)
+                .map(T::as_ref)
+                .enumerate()
+                .map(|(i, item)| {
+                    if i == selected {
+                        Cow::Owned(paint_selected(item))
+                    } else {
+                        Cow::Borrowed(item)
+                    }
+                }),
+        );
     } else {
         buf.push_slice(b"No matches");
     }
@@ -108,6 +114,7 @@ fn suggest_completions<T: AsRef<[u8]> + std::fmt::Debug>(
 
 impl Completer {
     fn present(&mut self, current_word: &str) -> IoResult<()> {
+        // Rough caching mechanism to prevent recomputing the completion everytime
         self.current_selection = self
             .current_selection
             .take()
@@ -115,25 +122,21 @@ impl Completer {
         let current_selection = match self.current_selection {
             Some(ref sel) => sel,
             None => {
-                    self.file_provider.provide(current_word)?;
-                    &*self.current_selection.insert(Selection::new(current_word))
-                },
+                self.file_provider.provide(current_word)?;
+                &*self.current_selection.insert(Selection::new(current_word))
+            }
         };
         let pos = cursor::get_cursor_pos()?;
         let items = self.file_provider.items();
-        let response = suggest_completions(pos, &items, current_selection.index);
+        let response = suggest_completions(pos, items, current_selection.index);
         write(&response)?;
         Ok(())
     }
     pub fn next(&mut self, current_word: &str, direction: SelectionDirection) -> IoResult<()> {
         if let Some(ref mut selection) = self.current_selection {
             match direction {
-                SelectionDirection::Down => {
-                    selection.index = selection.index.wrapping_add(1)
-                }
-                SelectionDirection::Up => {
-                    selection.index = selection.index.wrapping_sub(1)
-                }
+                SelectionDirection::Down => selection.index = selection.index.wrapping_add(1),
+                SelectionDirection::Up => selection.index = selection.index.wrapping_sub(1),
             }
         }
         self.present(current_word)
@@ -144,17 +147,13 @@ impl Completer {
         let total_items = items.len();
         let index = index_safe(items.len(), current_selection.index)?;
         let item = self.file_provider.accept(&items[index]);
-        Some(CompletionInfo {
-            item,
-            total_items,
-        })
-            
+        Some(CompletionInfo { item, total_items })
     }
     pub fn clear(&mut self) -> IoResult<()> {
         self.unselect();
-        let UVec2 {x, ..} = cursor::get_cursor_pos()?;
+        let UVec2 { x, .. } = cursor::get_cursor_pos()?;
         let mut buf = BytesBuf::of([b"\n\r", cursor::kill_to_term_end()]);
-        buf.extend([cursor::move_up(1), cursor::move_right(x-1)]);
+        buf.extend([cursor::move_up(1), cursor::move_right(x - 1)]);
         write(&buf.join(b""))?;
         Ok(())
     }

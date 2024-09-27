@@ -1,4 +1,4 @@
-use std::{borrow::Cow};
+use std::{borrow::Cow, collections::hash_map::Entry};
 
 use color_eyre::eyre::eyre;
 
@@ -133,7 +133,7 @@ pub fn exit(shell: &mut Shell, command: Command) -> Result {
 /// Lists, creates or deletes aliases
 pub fn alias(shell: &mut Shell, command: Command) -> Result {
     let args = command.args;
-    // alias
+    // usage: alias
     // print all aliases
     if args.len() == 0 {
         for builtin in shell.builtins.values() {
@@ -144,21 +144,21 @@ pub fn alias(shell: &mut Shell, command: Command) -> Result {
         match arg.split_once('=') {
             Some((name, cmd)) => {
                 if cmd.is_empty() {
-                    // alias name=
+                    // usage: alias name=
                     // Delete alias
-                    match shell.builtins.get(name) {
-                        Some(b) if matches!(b.action, Action::Alias{..}) => { shell.builtins.remove(name); },
+                    match shell.builtins.entry(name.to_owned()) {
+                       Entry::Occupied(b) if matches!(b.get().action, Action::Alias{..}) => { b.remove(); },
                         _ => shell_println!("Alias '{}' not found.", name),
                     }
                 } else {
-                    // alias name=cmd
+                    // usage: alias name=cmd
                     // Creates aliases
                     let mut args = shell_word_split::split(cmd)?;
                     let cmd = args.remove(0);
                     shell.register_builtin(Builtin::new_alias(name.to_owned(), cmd, args));
                 }
             },
-            // alias name
+            // usage: alias name
             // Print alias if it exists
             None => {
                 if let Some(builtin) = shell.builtins.get(&arg) {

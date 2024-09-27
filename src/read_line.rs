@@ -91,7 +91,7 @@ impl ReadLine {
         if word_end != 0 && line.chars().nth(word_end - 1) != Some(' ') {
             // Find the start of the word by searching backwards for a space
             let word_start = line[0..word_end]
-                .rfind(|c| c == ' ')
+                .rfind(' ')
                 .map(|i| i + 1)
                 .unwrap_or_default();
             &line[word_start..word_end]
