@@ -1,10 +1,9 @@
 use std::io::Write;
 
-
 use bstr::ByteSlice;
 use nix::pty::Winsize;
 
-use crate::{write, read, Vec2, binformat};
+use crate::{binformat, read, write, Vec2};
 
 #[must_use]
 pub fn move_left(times: u32) -> Vec<u8> {
@@ -69,7 +68,9 @@ pub fn get_cursor_pos() -> nix::Result<Vec2> {
     let mut i = 0;
     loop {
         let read = read(&mut buf[i..])?;
-        if read == 0 { continue }
+        if read == 0 {
+            continue;
+        }
         i += read;
         if let Some(new_i) = buf.find(&b"R") {
             i = new_i;
@@ -100,4 +101,3 @@ pub fn terminal_size() -> nix::Result<Vec2> {
         Ok(Vec2::new(winsz.ws_col as u32, winsz.ws_row as u32))
     }
 }
-

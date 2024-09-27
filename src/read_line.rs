@@ -1,13 +1,7 @@
-
-
 use bstr::ByteSlice;
 use glam::UVec2;
 
-use crate::{
-    read,
-    utils::{char_count},
-    write, YshResult, shell_println, sdbg,
-};
+use crate::{read, sdbg, shell_println, utils::char_count, write, YshResult};
 
 use self::{completion::SelectionDirection, history::History};
 
@@ -116,36 +110,48 @@ impl ReadLine {
                 Commands::Exit => Some(Execute::Exit),
                 Commands::EOF => Some(Execute::Cancel),
                 Commands::Newline => Some(Execute::Command(self.text_field.text().to_string())),
-                special if let Some(key) = special.get_key() => { match key {
-                    SpecialKey::Up => self.scroll_history(1)?,
-                    SpecialKey::Down => self.scroll_history(-1)?,
-                    SpecialKey::Tab => self.complete_next(SelectionDirection::Down)?,
-                    SpecialKey::ShiftTab => self.complete_next(SelectionDirection::Up)?,
-                }; None }
-                e => unreachable!("Unknown key: {:?}", e)
+                special if let Some(key) = special.get_key() => {
+                    match key {
+                        SpecialKey::Up => self.scroll_history(1)?,
+                        SpecialKey::Down => self.scroll_history(-1)?,
+                        SpecialKey::Tab => self.complete_next(SelectionDirection::Down)?,
+                        SpecialKey::ShiftTab => self.complete_next(SelectionDirection::Up)?,
+                    };
+                    None
+                }
+                e => unreachable!("Unknown key: {:?}", e),
             },
             // Completion in progress
             Some(completion_info) => match response.commands {
                 Commands::None => None,
-                Commands::EOF | Commands::Exit => { self.completion.clear()?; None },
+                Commands::EOF | Commands::Exit => {
+                    self.completion.clear()?;
+                    None
+                }
                 Commands::Newline => {
                     // Accept completion
-                    let word_count = char_count(sdbg!(Self::word_at_cursor(&self.text_field))) as u32;
+                    let word_count =
+                        char_count(sdbg!(Self::word_at_cursor(&self.text_field))) as u32;
                     self.text_field.move_left(word_count);
                     self.text_field.erase_right(word_count);
                     let response = self.text_field.handle_input(completion_info.item());
                     // Prevents special characters in complete prompts from being interpreted
                     self.completion.clear()?;
-                    return self.handle_response(response)
-                },
-                special if let Some(key) = special.get_key() => { match key {
-                    SpecialKey::Down |
-                    SpecialKey::Tab => self.complete_next(SelectionDirection::Down)?,
-                    SpecialKey::Up |
-                    SpecialKey::ShiftTab => self.complete_next(SelectionDirection::Up)?,
-                }; None }
-                e => unreachable!("Unknown key: {:?}", e)
-            }
+                    return self.handle_response(response);
+                }
+                special if let Some(key) = special.get_key() => {
+                    match key {
+                        SpecialKey::Down | SpecialKey::Tab => {
+                            self.complete_next(SelectionDirection::Down)?
+                        }
+                        SpecialKey::Up | SpecialKey::ShiftTab => {
+                            self.complete_next(SelectionDirection::Up)?
+                        }
+                    };
+                    None
+                }
+                e => unreachable!("Unknown key: {:?}", e),
+            },
         };
         Ok(exe)
     }

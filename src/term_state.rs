@@ -31,12 +31,13 @@ impl TermState {
         new.control_chars[SpecialCharacterIndices::VMIN as usize] = 0;
         new.control_chars[SpecialCharacterIndices::VTIME as usize] = 1;
         Self {
-            new: Some(new), old: Some(current)
+            new: Some(new),
+            old: Some(current),
         }
     }
     fn put_termios(termios: &Option<Termios>) -> nix::Result<()> {
         if let Some(termios) = termios {
-            return termios::tcsetattr(nix::libc::STDIN_FILENO, termios::SetArg::TCSADRAIN, termios)
+            return termios::tcsetattr(nix::libc::STDIN_FILENO, termios::SetArg::TCSADRAIN, termios);
         }
         Ok(())
     }
@@ -77,4 +78,3 @@ pub fn restore() {
         );
     }
 }
-

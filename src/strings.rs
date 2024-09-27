@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-
 impl crate::Shell {
     /// Unconditionally replaces all sequences of `$VAR` with a value for `VAR`.
     pub fn expand_vars<'a>(&self, text: &'a str) -> Cow<'a, str> {

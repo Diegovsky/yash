@@ -16,9 +16,9 @@ mod config;
 mod prompt;
 mod read_line;
 mod signals;
+mod strings;
 mod term_state;
 mod utils;
-mod strings;
 
 mod debug;
 

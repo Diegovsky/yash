@@ -2,9 +2,9 @@ use bstr::BStr;
 use color_eyre::eyre::Context;
 use glam::UVec2;
 
-use crate::{sdbg, utils};
 use crate::utils::BytesBuf;
 use crate::write;
+use crate::{sdbg, utils};
 use std::borrow::Cow;
 
 pub(self) use std::io::Result as IoResult;

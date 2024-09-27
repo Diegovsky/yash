@@ -1,9 +1,12 @@
-use std::{path::PathBuf};
+use std::path::PathBuf;
 
 use crate::utils::read_file;
 
 pub fn get_config_folder() -> PathBuf {
-    directories::BaseDirs::new().unwrap().config_dir().join("yash")
+    directories::BaseDirs::new()
+        .unwrap()
+        .config_dir()
+        .join("yash")
 }
 
 pub fn get_history_file() -> PathBuf {

@@ -1,26 +1,28 @@
-use crate::{YshResult, shell_println};
+use crate::{shell_println, YshResult};
 
 use std::process::Stdio;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpecialAction {
-    Redir{ to: String },
-    Pipe{ next_command: Box<Command> }
+    Redir { to: String },
+    Pipe { next_command: Box<Command> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Command {
     pub command: String,
     pub args: Vec<String>,
-    pub special_action: Option<SpecialAction>
+    pub special_action: Option<SpecialAction>,
 }
 
 impl Command {
     pub fn prepare_to_execute(self) -> std::io::Result<Vec<std::process::Command>> {
         let mut cmd = std::process::Command::new(self.command);
         cmd.args(self.args);
-        match(self).special_action {
-            Some(SpecialAction::Redir { to }) => { cmd.stdout(std::fs::File::create(to)?); },
+        match (self).special_action {
+            Some(SpecialAction::Redir { to }) => {
+                cmd.stdout(std::fs::File::create(to)?);
+            }
             Some(SpecialAction::Pipe { next_command }) => {
                 let mut cmd_string = next_command.prepare_to_execute()?;
                 cmd_string.last_mut().unwrap().stdin(Stdio::piped());
@@ -34,20 +36,39 @@ impl Command {
     }
     pub fn parse_args(mut args: Vec<String>) -> YshResult<Self> {
         if args.is_empty() {
-            return Ok(Self::default())
+            return Ok(Self::default());
         }
         let command = args.remove(0);
-        match args.iter().position(|a| a.starts_with(">") || a.starts_with("|")) {
+        match args
+            .iter()
+            .position(|a| a.starts_with(">") || a.starts_with("|"))
+        {
             Some(special_id) => {
                 let mut extra_args: Vec<_> = args.drain(special_id..).collect();
                 let special = extra_args.remove(0);
                 match special.as_bytes()[0] {
-                    b'>' => Ok(Command {command, args, special_action: Some(SpecialAction::Redir { to: extra_args.remove(0) })}),
-                    b'|' => Ok(Command {command, args, special_action: Some(SpecialAction::Pipe { next_command: Box::new(Command::parse_args(extra_args)?) })}),
-                    _ => unreachable!()
+                    b'>' => Ok(Command {
+                        command,
+                        args,
+                        special_action: Some(SpecialAction::Redir {
+                            to: extra_args.remove(0),
+                        }),
+                    }),
+                    b'|' => Ok(Command {
+                        command,
+                        args,
+                        special_action: Some(SpecialAction::Pipe {
+                            next_command: Box::new(Command::parse_args(extra_args)?),
+                        }),
+                    }),
+                    _ => unreachable!(),
                 }
-            },
-            _ => Ok(Command {command, args, special_action: None})
+            }
+            _ => Ok(Command {
+                command,
+                args,
+                special_action: None,
+            }),
         }
     }
     pub fn parse(line: &str) -> YshResult<Self> {
@@ -55,13 +76,12 @@ impl Command {
     }
     /// Shifts the arguments to the left by one, removing the command name
     pub fn shift(mut self) -> Self {
-        let command =
-            if self.args.len() == 0 {
-                String::new()
-            } else {
-                self.args.remove(0)
-            };
-        Self {command, ..self}
+        let command = if self.args.len() == 0 {
+            String::new()
+        } else {
+            self.args.remove(0)
+        };
+        Self { command, ..self }
     }
 }
 
@@ -71,7 +91,7 @@ impl crate::Shell {
         // We wait on all of them later.
         let mut spawned = vec![];
         let _token = self.term_state.put_old_token()?;
-            
+
         let mut pipeline = cmd.prepare_to_execute()?;
         pipeline.reverse();
 
@@ -119,4 +139,3 @@ impl crate::Shell {
         result
     }
 }
-

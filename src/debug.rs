@@ -33,7 +33,7 @@ mod debug {
 
         pub fn render(&self, term_size: Vec2) -> std::io::Result<()> {
             if self.lines.len() == 0 {
-                return Ok(())
+                return Ok(());
             }
             let current_pos = cursor::get_cursor_pos().unwrap();
             let line_len = term_size.x as usize / 2;
@@ -42,12 +42,22 @@ mod debug {
             for l in self.lines.iter() {
                 if l.len() > line_len {
                     let chars = l.chars().collect::<Vec<_>>();
-                    lines.extend(chars.chunks(line_len).map(|slice| slice.iter().collect::<String>()).map(|s| s.into_bytes()));
+                    lines.extend(
+                        chars
+                            .chunks(line_len)
+                            .map(|slice| slice.iter().collect::<String>())
+                            .map(|s| s.into_bytes()),
+                    );
                 } else {
                     lines.push_slice(l.as_bytes());
                 }
             }
-            let sep = [B("\n\r"), cursor::move_right(startx).as_slice(), cursor::kill_line()].concat();
+            let sep = [
+                B("\n\r"),
+                cursor::move_right(startx).as_slice(),
+                cursor::kill_line(),
+            ]
+            .concat();
             let lines = lines.join(sep);
             let buf = bytes_buf! {
                 cursor::set_position(startx as u8+1, 1),

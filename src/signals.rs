@@ -1,5 +1,4 @@
-use std::sync::{Arc, atomic::AtomicBool};
-
+use std::sync::{atomic::AtomicBool, Arc};
 
 #[derive(Debug, Clone, Default)]
 pub struct Signals {
@@ -10,8 +9,6 @@ impl Signals {
     pub fn init() -> Self {
         let sigint = Arc::new(AtomicBool::new(false));
         signal_hook::flag::register(signal_hook::consts::SIGINT, sigint.clone()).unwrap();
-        Self {
-            sigint
-        }
+        Self { sigint }
     }
 }

@@ -1,16 +1,22 @@
-use std::{fs::DirEntry, path::{Path, PathBuf}, os::unix::prelude::OsStrExt, ffi::OsStr};
+use std::{
+    ffi::OsStr,
+    fs::DirEntry,
+    os::unix::prelude::OsStrExt,
+    path::{Path, PathBuf},
+};
 
-use bstr::{BString, ByteVec, ByteSlice};
+use bstr::{BString, ByteSlice, ByteVec};
 use color_eyre::eyre::Context;
 
-use crate::{utils, YshResult, shell_println};
+use crate::{shell_println, utils, YshResult};
 
 use super::CompletionProvider;
 
 fn format_filename(entry: DirEntry) -> BString {
     let file_type = entry.file_type().expect("Failed to query file informaton");
     let file_name = entry.file_name();
-    let mut file_name = BString::from(Vec::from_os_string(file_name).expect("Got invalid filename"));
+    let mut file_name =
+        BString::from(Vec::from_os_string(file_name).expect("Got invalid filename"));
     if file_type.is_dir() {
         // Append a slash if it is a directory
         file_name.push(b'/');
@@ -26,7 +32,7 @@ fn format_filename(entry: DirEntry) -> BString {
 #[derive(Default, Debug, Clone)]
 pub struct FileProvider {
     cwd: PathBuf,
-    items: Vec<BString>
+    items: Vec<BString>,
 }
 
 impl<'a> CompletionProvider<'a> for FileProvider {
@@ -51,6 +57,8 @@ impl<'a> CompletionProvider<'a> for FileProvider {
         if self.cwd == Path::new(".") {
             return item.clone();
         }
-        Vec::from_path_buf(self.cwd.join(item.to_os_str().unwrap())).unwrap().into()
+        Vec::from_path_buf(self.cwd.join(item.to_os_str().unwrap()))
+            .unwrap()
+            .into()
     }
 }

@@ -2,8 +2,8 @@ use std::mem;
 
 use bstr::ByteVec;
 
-use crate::utils::{char_count, char_at};
-use crate::{Vec2 as Pos};
+use crate::utils::{char_at, char_count};
+use crate::Vec2 as Pos;
 
 use super::cursor;
 
@@ -105,7 +105,10 @@ impl Response {
 
 impl TextField {
     pub fn new(bounds: Pos) -> Self {
-        Self { bounds, ..Default::default() }
+        Self {
+            bounds,
+            ..Default::default()
+        }
     }
 
     pub fn set_bounds(&mut self, bounds: Pos) {
@@ -116,20 +119,18 @@ impl TextField {
     fn handle_backspace(&mut self) {
         // Do nothing on line start
         if self.cursor_pos.x == 0 {
-            return
+            return;
         }
         self.cursor_pos.x -= 1;
         let char_idx = self.char_at(self.cx()).unwrap();
         self.text.remove(char_idx);
         let replacement = &self.text[char_idx..].to_owned();
-        self.response.bytes.extend_from_slice(
-            &commands![
-                cursor::move_left(1),
-                cursor::kill_line(),
-                replacement,
-                cursor::move_left(char_count(replacement) as u32),
-            ]
-        )
+        self.response.bytes.extend_from_slice(&commands![
+            cursor::move_left(1),
+            cursor::kill_line(),
+            replacement,
+            cursor::move_left(char_count(replacement) as u32),
+        ])
     }
 
     pub fn erase_left(&mut self, times: u32) {
@@ -139,7 +140,7 @@ impl TextField {
         }
     }
 
-    pub fn erase_right(&mut self, times: u32)  {
+    pub fn erase_right(&mut self, times: u32) {
         self.move_right(times);
         for _ in 0..times {
             self.handle_backspace();
@@ -154,14 +155,13 @@ impl TextField {
         char_at(&self.text, index)
     }
 
-
     fn text_len(&self) -> usize {
         char_count(&self.text)
     }
 
     fn handle_char(&mut self, c: char) {
         if self.cursor_pos.x >= self.bounds.x {
-            return
+            return;
         }
         let text_len = self.text_len();
         if self.cursor_pos.x as usize == text_len {
@@ -194,9 +194,7 @@ impl TextField {
     }
 
     pub fn erase_rest(&mut self) {
-        self.response.bytes = commands![
-            cursor::kill_line(),
-        ];
+        self.response.bytes = commands![cursor::kill_line(),];
         self.text.truncate(self.cursor_pos.x as usize);
     }
 
@@ -216,32 +214,40 @@ impl TextField {
             return;
         };
         self.cursor_pos.x -= times;
-        self.response.bytes.extend_from_slice(&cursor::move_left(times));
+        self.response
+            .bytes
+            .extend_from_slice(&cursor::move_left(times));
     }
 
     pub fn move_right(&mut self, times: u32) {
         let newx = self.cursor_pos.x + times;
         if newx >= self.bounds.x {
-            return
+            return;
         }
         self.cursor_pos.x = newx;
-        self.response.bytes.extend_from_slice(&cursor::move_right(times));
+        self.response
+            .bytes
+            .extend_from_slice(&cursor::move_right(times));
     }
 
     pub fn handle_input(&mut self, input: &str) -> Response {
         let mut it = input.chars();
         while let Some(c) = it.next() {
             match c as u8 {
-                1 => { // ctrl A
+                1 => {
+                    // ctrl A
                     self.move_left(self.cursor_pos.x);
                 }
-                3 => { // ctrl C
+                3 => {
+                    // ctrl C
                     self.response.commands = Commands::Exit;
                 }
-                4 => { // ctrl D
+                4 => {
+                    // ctrl D
                     self.response.commands = Commands::EOF;
                 }
-                5 => { // ctrl E
+                5 => {
+                    // ctrl E
                     self.move_right(self.text_len() as u32 - self.cursor_pos.x);
                 }
                 b'\t' => {
@@ -251,17 +257,24 @@ impl TextField {
                     self.response.commands = Commands::Newline;
                 }
                 b'\x1b' => {
-                    if it.next() != Some('[') { continue }
+                    if it.next() != Some('[') {
+                        continue;
+                    }
                     match it.next().unwrap() {
                         'A' => self.response.commands = Commands::special(SpecialKey::Up),
                         'B' => self.response.commands = Commands::special(SpecialKey::Down),
                         'C' => self.move_right(1),
                         'D' => self.move_left(1),
                         'Z' => self.response.commands = Commands::special(SpecialKey::ShiftTab),
-                        '3' => if it.next() == Some('~') { self.move_right(1); self.handle_backspace() },
+                        '3' => {
+                            if it.next() == Some('~') {
+                                self.move_right(1);
+                                self.handle_backspace()
+                            }
+                        }
                         _ => (),
                     }
-                },
+                }
                 1..=26 => (),
                 127 => self.handle_backspace(),
                 _ => self.handle_char(c),
@@ -287,5 +300,4 @@ impl TextField {
     pub fn cursor_pos(&self) -> Pos {
         self.cursor_pos
     }
-
 }

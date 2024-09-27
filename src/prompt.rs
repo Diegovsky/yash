@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::HashMap};
 
-use regex::{Regex, Captures};
+use regex::{Captures, Regex};
 
 use crate::Shell;
 
@@ -15,20 +15,19 @@ impl std::fmt::Display for Prefix {
 
 pub fn replace_colors(text: &str) -> Cow<str> {
     static REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let color_regex = REGEX.get_or_init(|| {
-        Regex::new(r#"%(?<mode>[F])\{#(?<color>[[:xdigit:]]{6})\}"#).unwrap()
-    });
+    let color_regex =
+        REGEX.get_or_init(|| Regex::new(r#"%(?<mode>[F])\{#(?<color>[[:xdigit:]]{6})\}"#).unwrap());
     color_regex.replace_all(text, |captures: &regex::Captures| {
         let mode = &captures["mode"];
         match mode {
             "F" => {
                 let color = &captures["color"];
                 let color = u32::from_str_radix(color, 16).unwrap();
-                let get_part = |shift: u32| ((color>>shift)&0xFF) as u8;
+                let get_part = |shift: u32| ((color >> shift) & 0xFF) as u8;
                 let color = yansi_term::Color::RGB(get_part(16), get_part(8), get_part(0));
                 Prefix(color.normal()).to_string()
-            },
-            _ => unreachable!()
+            }
+            _ => unreachable!(),
         }
     })
 }
@@ -37,9 +36,7 @@ const DEFAULT_PROMPT: &'static str = "%F{#ff8080}%h%f $ ";
 
 pub fn get_prompt(shell: &Shell) -> String {
     static REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let regex = REGEX.get_or_init(|| {
-        Regex::new(r#"%([nmhf])\b"#).unwrap()
-    });
+    let regex = REGEX.get_or_init(|| Regex::new(r#"%([nmhf])\b"#).unwrap());
     let home = crate::builtins::get_home();
     let cwd = shell.cwd.to_string_lossy().replace(&home, "~");
     let username = crate::builtins::get_username();
@@ -52,8 +49,9 @@ pub fn get_prompt(shell: &Shell) -> String {
         ("m", hostname),
         ("h", cwd),
         ("f", String::from("\x1B[0m")),
-    ].into_iter()
-     .collect();
+    ]
+    .into_iter()
+    .collect();
     let prompt_fmt = shell.get_var("PS1").unwrap_or(DEFAULT_PROMPT);
     let args_replaced = regex.replace_all(&prompt_fmt, |captures: &Captures| {
         &replaces_table[&captures[1]]
@@ -92,7 +90,8 @@ mod tests {
     }
     #[test]
     fn replace_mixed() {
-        let text = replace_colors("%F{#FF0000}I am red!%f%F{#00FF00}I am green!%f%F{#0000FF}I am blue!%f");
+        let text =
+            replace_colors("%F{#FF0000}I am red!%f%F{#00FF00}I am green!%f%F{#0000FF}I am blue!%f");
         assert_eq!(text, "\x1b[38;2;255;0;0mI am red!%f\x1b[38;2;0;255;0mI am green!%f\x1b[38;2;0;0;255mI am blue!%f");
     }
 }

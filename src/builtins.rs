@@ -2,54 +2,68 @@ use std::{borrow::Cow, collections::hash_map::Entry};
 
 use color_eyre::eyre::eyre;
 
-use crate::{Shell, command::Command};
+use crate::{command::Command, Shell};
 
 pub type Result = color_eyre::Result<()>;
 
 #[derive(Clone)]
 pub enum Action {
-    Alias{ cmd: String, extra_args: Vec<String> },
-    Fn(fn(&mut Shell, Command)->Result),
+    Alias {
+        cmd: String,
+        extra_args: Vec<String>,
+    },
+    Fn(fn(&mut Shell, Command) -> Result),
 }
 
 impl std::fmt::Debug for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let variant = match self {
             Self::Fn(_) => "Fn",
-            Self::Alias{ .. } => "Alias"
+            Self::Alias { .. } => "Alias",
         };
-        write!(f, "Action::{:?}{{ {} }}", variant, match self { Self::Alias{cmd,..} => cmd.as_ref(), _ => "..." })
+        write!(
+            f,
+            "Action::{:?}{{ {} }}",
+            variant,
+            match self {
+                Self::Alias { cmd, .. } => cmd.as_ref(),
+                _ => "...",
+            }
+        )
     }
 }
 
 impl std::fmt::Display for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Alias{cmd, extra_args} => write!(f, "{} {}", cmd, extra_args.join(" ")),
+            Self::Alias { cmd, extra_args } => write!(f, "{} {}", cmd, extra_args.join(" ")),
             Self::Fn(_) => write!(f, "<builtin>"),
         }
-        
     }
 }
 
 impl Action {
-    pub fn call(&self, shell: &mut Shell, command: Command)->Result {
+    pub fn call(&self, shell: &mut Shell, command: Command) -> Result {
         if shell.builtin_recursive_count >= 16 {
             shell.builtin_recursive_count = 0;
             return Err(eyre!("Too many layers deep!"));
         }
         match self {
             Self::Fn(f) => f(shell, command),
-            Self::Alias{cmd, extra_args} => {
+            Self::Alias { cmd, extra_args } => {
                 let mut args = extra_args.clone();
                 args.extend_from_slice(&command.args);
 
-                let cmd = Command {command: cmd.clone(), args, ..command};
+                let cmd = Command {
+                    command: cmd.clone(),
+                    args,
+                    ..command
+                };
                 shell.builtin_recursive_count += 1;
                 let r = shell.execute(cmd);
                 shell.builtin_recursive_count = 0;
                 r
-            },
+            }
         }
     }
 }
@@ -61,11 +75,17 @@ pub struct Builtin {
 }
 
 impl Builtin {
-    pub fn new_fn(name: String, action: fn(&mut Shell, Command)->Result) -> Self {
-        Self { action: Action::Fn(action), name }
+    pub fn new_fn(name: String, action: fn(&mut Shell, Command) -> Result) -> Self {
+        Self {
+            action: Action::Fn(action),
+            name,
+        }
     }
     pub fn new_alias(name: String, cmd: String, extra_args: Vec<String>) -> Self {
-        Self { action: Action::Alias{cmd, extra_args}, name }
+        Self {
+            action: Action::Alias { cmd, extra_args },
+            name,
+        }
     }
 }
 
@@ -82,20 +102,18 @@ pub fn get_username() -> String {
 }
 
 pub fn get_home() -> String {
-    std::env::var("HOME")
-        .unwrap_or_else(|_|{
-            let mut home = String::default();
-            #[cfg(not(any(target_os = "macos")))]
-            home.push_str("/home/");
-            #[cfg(target_os = "macos")]
-            get_home.push_str("/Users/");
-            #[cfg(not(target_os = "haiku"))]
-            {
-                home.push_str(&get_username());
-            }
-            home
+    std::env::var("HOME").unwrap_or_else(|_| {
+        let mut home = String::default();
+        #[cfg(not(any(target_os = "macos")))]
+        home.push_str("/home/");
+        #[cfg(target_os = "macos")]
+        get_home.push_str("/Users/");
+        #[cfg(not(target_os = "haiku"))]
+        {
+            home.push_str(&get_username());
         }
-    )
+        home
+    })
 }
 
 macro_rules! ensure_arg {
@@ -111,7 +129,9 @@ macro_rules! ensure_arg {
 
 /// Change current directory
 pub fn cd(shell: &mut Shell, command: Command) -> Result {
-    let path = command.args.get(0)
+    let path = command
+        .args
+        .get(0)
         .map(Cow::Borrowed)
         .unwrap_or_else(|| Cow::Owned(get_home()));
     if let Err(e) = shell.change_directory(path.as_str()) {
@@ -123,9 +143,7 @@ pub fn cd(shell: &mut Shell, command: Command) -> Result {
 /// Quits the shell
 pub fn exit(shell: &mut Shell, command: Command) -> Result {
     let args = command.args;
-    let code = args.get(0)
-        .and_then(|s| s.parse::<i32>().ok())
-        .unwrap_or(0);
+    let code = args.get(0).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
     shell.exit(code);
     Ok(())
 }
@@ -147,7 +165,9 @@ pub fn alias(shell: &mut Shell, command: Command) -> Result {
                     // usage: alias name=
                     // Delete alias
                     match shell.builtins.entry(name.to_owned()) {
-                       Entry::Occupied(b) if matches!(b.get().action, Action::Alias{..}) => { b.remove(); },
+                        Entry::Occupied(b) if matches!(b.get().action, Action::Alias { .. }) => {
+                            b.remove();
+                        }
                         _ => shell_println!("Alias '{}' not found.", name),
                     }
                 } else {
@@ -157,7 +177,7 @@ pub fn alias(shell: &mut Shell, command: Command) -> Result {
                     let cmd = args.remove(0);
                     shell.register_builtin(Builtin::new_alias(name.to_owned(), cmd, args));
                 }
-            },
+            }
             // usage: alias name
             // Print alias if it exists
             None => {
@@ -166,7 +186,7 @@ pub fn alias(shell: &mut Shell, command: Command) -> Result {
                 } else {
                     shell_println!("\"{}\" is not an alias", arg)
                 }
-            },
+            }
         }
     }
     Ok(())
@@ -190,7 +210,14 @@ pub fn exec(shell: &mut Shell, command: Command) -> Result {
 
 /// Debug command to recompile the shell and run it
 pub fn r(shell: &mut Shell, command: Command) -> Result {
-    exec(shell, Command{ command: String::new(), args: vec!["cargo".to_string(), "run".to_string()], ..command })
+    exec(
+        shell,
+        Command {
+            command: String::new(),
+            args: vec!["cargo".to_string(), "run".to_string()],
+            ..command
+        },
+    )
 }
 
 /// Executes a file as a shell script
@@ -217,7 +244,7 @@ pub fn export(shell: &mut Shell, command: Command) -> Result {
                 if let Some(v) = shell.get_var(&name) {
                     std::env::set_var(name, v);
                 }
-            },
+            }
         }
     }
     Ok(())
@@ -231,20 +258,9 @@ macro_rules! register_builtins {
             ].into_iter()
                 .map(|b| (b.name.clone(), b))
                 .collect()
-        
+
         }
     };
 }
 
-register_builtins!(
-    cd,
-    exit,
-    alias,
-    command,
-    exec,
-    set_pos,
-    source,
-    export,
-    r
-);
-
+register_builtins!(cd, exit, alias, command, exec, set_pos, source, export, r);

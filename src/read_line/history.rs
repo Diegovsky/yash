@@ -1,4 +1,3 @@
-
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct History {
     past_lines: Vec<String>,
@@ -6,10 +5,12 @@ pub struct History {
     index: usize,
 }
 
-
 impl History {
     pub fn from_lines(lines: Vec<String>) -> Self {
-        Self { past_lines: lines, ..Default::default() }
+        Self {
+            past_lines: lines,
+            ..Default::default()
+        }
     }
     pub fn push(&mut self, line: impl Into<String>) {
         let line = line.into();
@@ -23,9 +24,10 @@ impl History {
     }
     fn get_line<'a, 'b>(&self, index: usize) -> Option<&str> {
         if index == 0 {
-            return self.draft_line.as_deref()
+            return self.draft_line.as_deref();
         } else {
-            self.past_lines.get(self.past_lines.len().checked_sub(index)?)
+            self.past_lines
+                .get(self.past_lines.len().checked_sub(index)?)
         }
         .map(String::as_ref)
     }
