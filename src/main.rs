@@ -95,7 +95,9 @@ impl Shell {
             signals: signals::Signals::init(),
             ..Default::default()
         };
-        this.change_directory(".")?;
+        if let Err(e) = this.change_directory(".") {
+            shell_println!("Failed to cd into current directory: {}", e);
+        }
         this.term_state.put_new()?;
         Ok(this)
     }

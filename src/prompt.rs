@@ -32,7 +32,7 @@ pub fn replace_colors(text: &str) -> Cow<str> {
     })
 }
 
-const DEFAULT_PROMPT: &'static str = "%F{#ff8080}%h%f $ ";
+const DEFAULT_PROMPT: &str = "%F{#ff8080}%n@%m %h%f $ ";
 
 pub fn get_prompt(shell: &Shell) -> String {
     static REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
