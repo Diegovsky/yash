@@ -47,6 +47,11 @@ pub fn set_position(x: u8, y: u8) -> Vec<u8> {
 }
 
 #[must_use]
+pub fn set_positionv(vec: Vec2) -> Vec<u8> {
+    set_position(vec.x as _, vec.y as _)
+}
+
+#[must_use]
 pub fn kill_line() -> &'static [u8] {
     b"\x1b[K"
 }

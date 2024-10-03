@@ -12,11 +12,13 @@ pub struct OldStateToken<'a>(&'a TermState);
 
 impl Drop for OldStateToken<'_> {
     fn drop(&mut self) {
-        let _ = self.0.put_new().unwrap();
+        self.0.put_new().unwrap();
     }
 }
 
 impl TermState {
+
+    #[allow(clippy::eq_op)]
     pub fn new(current: Termios) -> Self {
         let mut new = current.clone();
         new.input_flags &= !(InputFlags::BRKINT

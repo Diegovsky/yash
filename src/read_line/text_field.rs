@@ -48,7 +48,7 @@ bitflags::bitflags! {
     pub struct Commands: u8 {
         const None = 0;
         const EOF = 1;
-        const Exit = 1<<1;
+        const Cancel = 1<<1;
         const Newline = 1<<2;
         const Special = 1<<7;
     }
@@ -80,7 +80,7 @@ impl Commands {
     }
     /// Returns true if this instance is the command [`Commands::Exit`].
     pub fn is_exit(&self) -> bool {
-        !self.contains(Commands::Special) && self.contains(Commands::Exit)
+        !self.contains(Commands::Special) && self.contains(Commands::Cancel)
     }
     /// Returns true if this instance is the command [`Commands::Newline`].
     pub fn is_newline(&self) -> bool {
@@ -95,12 +95,6 @@ impl Commands {
 pub struct Response {
     pub bytes: Vec<u8>,
     pub commands: Commands,
-}
-
-impl Response {
-    pub fn write(&self) -> nix::Result<()> {
-        crate::write(self.bytes.as_slice())
-    }
 }
 
 impl TextField {
@@ -240,7 +234,7 @@ impl TextField {
                 }
                 3 => {
                     // ctrl C
-                    self.response.commands = Commands::Exit;
+                    self.response.commands = Commands::Cancel;
                 }
                 4 => {
                     // ctrl D

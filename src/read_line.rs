@@ -107,8 +107,8 @@ impl ReadLine {
             // No completion in progress
             None => match response.commands {
                 Commands::None => None,
-                Commands::Exit => Some(Execute::Exit),
-                Commands::EOF => Some(Execute::Cancel),
+                Commands::Cancel => Some(Execute::Cancel),
+                Commands::EOF => Some(Execute::Exit),
                 Commands::Newline => Some(Execute::Command(self.text_field.text().to_string())),
                 special if let Some(key) = special.get_key() => {
                     match key {
@@ -124,7 +124,7 @@ impl ReadLine {
             // Completion in progress
             Some(completion_info) => match response.commands {
                 Commands::None => None,
-                Commands::EOF | Commands::Exit => {
+                Commands::EOF | Commands::Cancel => {
                     self.completion.clear()?;
                     None
                 }
@@ -166,7 +166,7 @@ impl ReadLine {
             let buf = Self::aligned_read(&mut c)?;
             let response = self
                 .text_field
-                .handle_input(std::str::from_utf8(&buf).unwrap());
+                .handle_input(std::str::from_utf8(buf).unwrap());
             if let Some(execute) = self.handle_response(response)? {
                 break execute;
             }

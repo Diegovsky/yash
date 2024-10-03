@@ -11,6 +11,7 @@ use color_eyre::eyre::WrapErr;
 
 pub type Vec2 = glam::u32::UVec2;
 
+mod widget;
 mod command;
 mod config;
 mod prompt;
@@ -45,7 +46,7 @@ macro_rules! shell_println {
 }
 
 pub fn write(bytes: &[u8]) -> nix::Result<()> {
-    if bytes.len() == 0 {
+    if bytes.is_empty() {
         return Ok(());
     }
     let mut written = 0;
@@ -62,7 +63,7 @@ pub fn write(bytes: &[u8]) -> nix::Result<()> {
 }
 
 fn read(buf: &mut [u8]) -> Result<usize, nix::Error> {
-    debug_assert!(buf.len() > 0);
+    debug_assert!(!buf.is_empty());
     let n = match nix::unistd::read(nix::libc::STDIN_FILENO, buf) {
         Ok(n) => n,
         Err(nix::errno::Errno::EAGAIN) => 0,
@@ -146,7 +147,7 @@ impl Shell {
             return Some(cmd);
         }
         let (name, value) = (parts[0].to_string(), parts[1].to_string());
-        if cmd.args.len() == 0 {
+        if cmd.args.is_empty() {
             // we got: NAME=VALUE
             self.set_var(name, value);
             None
@@ -159,7 +160,7 @@ impl Shell {
     }
 
     pub fn execute_line(&mut self, cmd: &str) -> YshResult<()> {
-        let cmd = self.expand_vars(&cmd);
+        let cmd = self.expand_vars(cmd);
         let cmd = Command::parse(&cmd)?;
         let Some(cmd) = self.try_command_or_var(cmd) else {
             return Ok(());
@@ -171,7 +172,7 @@ impl Shell {
     pub fn read_line(&mut self) -> YshResult<()> {
         shell_print!("{}", self.get_prompt());
         match self.read_line.read_line()? {
-            read_line::Execute::Exit => return Ok(()),
+            read_line::Execute::Exit => self.exit(0),
             read_line::Execute::Command(cmd) => self.execute_line(&cmd)?,
             read_line::Execute::Cancel => (),
         };
@@ -217,6 +218,14 @@ impl Shell {
                 }
             }
             Err(e) => shell_println!("Failed to open history file: {}", e),
+        }
+
+        // Clear anything typed in stdin before we reach the prompt.
+        let mut buf = [0u8; 16];
+        loop {
+            if read(&mut buf)? == 0 {
+                break
+            }
         }
 
         self.main_loop().expect("Mainloop quit");
